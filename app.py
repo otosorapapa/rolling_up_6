@@ -12035,6 +12035,10 @@ elif page == "比較ビュー":
         snapshot = snapshot[
             snapshot["display_name"].str.contains(search, case=False, na=False)
         ]
+
+    if snapshot.empty:
+        st.info("該当するSKUがありません。検索条件を見直してください。")
+        st.stop()
     # ---- 操作バー＋グラフ密着カード ----
 
     band_params_initial = params.get("band_params", {})
