@@ -12074,6 +12074,8 @@ elif page == "比較ビュー":
   .chart-toolbar .stRadio > label, .chart-toolbar .stCheckbox > label { color:var(--ink,var(--primary,#0B1F3B)); font-weight:600; }
   .chart-toolbar .stSlider label { color:var(--ink,var(--primary,#0B1F3B)); }
   .chart-body { padding:var(--space-1) var(--space-2) var(--space-2); }
+  .chart-body .stSlider { margin-top:0 !important; margin-bottom:0 !important; }
+  .chart-body .stCaption { margin-top:var(--space-0, 0) !important; margin-bottom:0 !important; }
   </style>
         """,
         unsafe_allow_html=True,
