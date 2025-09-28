@@ -12073,7 +12073,8 @@ elif page == "比較ビュー":
   .chart-toolbar .stMultiSelect, .chart-toolbar .stCheckbox { margin-bottom:0 !important; }
   .chart-toolbar .stRadio > label, .chart-toolbar .stCheckbox > label { color:var(--ink,var(--primary,#0B1F3B)); font-weight:600; }
   .chart-toolbar .stSlider label { color:var(--ink,var(--primary,#0B1F3B)); }
-  .chart-body { padding:var(--space-1) var(--space-2) var(--space-2); }
+  .chart-body { padding:var(--space-1) var(--space-2) var(--space-2); display:flex; flex-direction:column; gap:var(--space-0, 0); }
+  .chart-body [data-testid="stVerticalBlock"] { gap:0; padding-top:0; padding-bottom:0; }
   .chart-body .stSlider { margin-top:0 !important; margin-bottom:0 !important; }
   .chart-body .stCaption { margin-top:var(--space-0, 0) !important; margin-bottom:0 !important; }
   </style>
