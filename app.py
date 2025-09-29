@@ -13112,8 +13112,11 @@ elif page == "相関分析":
                         months_window = months_all[start_idx : end_idx + 1]
                         df_window = df_year[df_year["month"].isin(months_window)]
                         pivot = (
-                            df_window.pivot(
-                                index="month", columns="product_code", values=sku_metric
+                            df_window.pivot_table(
+                                index="month",
+                                columns="product_code",
+                                values=sku_metric,
+                                aggfunc="first",
                             ).sort_index()
                         )
                         pivot = pivot.dropna(how="all")
