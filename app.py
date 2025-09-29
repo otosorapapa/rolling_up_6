@@ -11532,7 +11532,17 @@ elif page == "ランキング":
 
     hierarchy_df = build_product_hierarchy(st.session_state.data_year)
     if not hierarchy_df.empty:
-        snapshot = snapshot.merge(hierarchy_df, on="product_code", how="left")
+        snapshot = snapshot.merge(
+            hierarchy_df, on="product_code", how="left", suffixes=("", "_hier")
+        )
+        for col in ("product_name", "department", "category"):
+            hier_col = f"{col}_hier"
+            if hier_col in snapshot.columns:
+                if col in snapshot.columns:
+                    snapshot[col] = snapshot[col].fillna(snapshot[hier_col])
+                else:
+                    snapshot[col] = snapshot[hier_col]
+                snapshot = snapshot.drop(columns=[hier_col])
     snapshot["department"] = snapshot.get("department", "その他").fillna("その他")
     snapshot["category"] = snapshot.get("category", "未分類").fillna("未分類")
     if "product_name" not in snapshot.columns:
