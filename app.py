@@ -1282,6 +1282,12 @@ select{
   pointer-events:none;
   z-index:1;
 }
+[data-baseweb="select"] [data-baseweb="tag"] svg{
+  pointer-events:auto;
+}
+[data-baseweb="select"] [data-baseweb="tag"]{
+  cursor:pointer;
+}
 [data-baseweb="input"] [aria-hidden="true"],
 [data-baseweb="select"] [aria-hidden="true"]{
   pointer-events:none;
