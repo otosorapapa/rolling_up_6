@@ -195,9 +195,12 @@ def generate_anomaly_brief(anomalies: pd.DataFrame, top_n: int = 5) -> str:
         )
         return pipe(prompt, max_new_tokens=150)[0]["generated_text"].strip()
 
+    scores = pd.to_numeric(
+        anomalies.get("score", pd.Series(dtype=float)), errors="coerce"
+    )
     total = len(anomalies)
-    pos = int((anomalies.get("score", pd.Series(dtype=float)) > 0).sum())
-    neg = total - pos
+    pos = int((scores > 0).sum())
+    neg = int((scores < 0).sum())
     parts = [f"異常値{total}件（上振れ{pos}件・下振れ{neg}件）。"]
     highlights = []
     for _, row in subset.iterrows():
