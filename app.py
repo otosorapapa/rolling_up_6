@@ -7726,7 +7726,12 @@ def _queue_nav_category(category: Optional[str], *, rerun_on_lock: bool = False)
         st.rerun()
 
 
-def set_active_page(page_key: str, *, rerun_on_lock: bool = False) -> None:
+def set_active_page(
+    page_key: str,
+    *,
+    rerun_on_lock: bool = False,
+    trigger_rerun: Optional[bool] = None,
+) -> None:
     meta = SIDEBAR_PAGE_LOOKUP.get(page_key)
     if not meta:
         return
@@ -7755,7 +7760,10 @@ def set_active_page(page_key: str, *, rerun_on_lock: bool = False) -> None:
             category,
             rerun_on_lock=rerun_on_lock and not rerun_required,
         )
-    if rerun_required and rerun_on_lock:
+    if trigger_rerun is None:
+        trigger_rerun = rerun_on_lock
+    should_rerun = (rerun_required and rerun_on_lock) or trigger_rerun
+    if should_rerun:
         st.rerun()
 
 
@@ -8859,15 +8867,17 @@ def render_quick_nav_tabs(active_page_key: str) -> None:
                     page_meta.get("title") or page_meta.get("page") or page_key,
                 ]
                 button_label = " ".join(part for part in button_label_parts if part)
-                clicked = st.button(
+                st.button(
                     button_label,
                     key=f"quick_nav_{cat}_{page_key}",
                     use_container_width=True,
                     disabled=page_key == active_page_key,
+                    on_click=set_active_page,
+                    kwargs={
+                        "page_key": page_key,
+                        "rerun_on_lock": True,
+                    },
                 )
-                if clicked:
-                    set_active_page(page_key, rerun_on_lock=True)
-                    st.rerun()
                 caption_parts: List[str] = []
                 tagline = page_meta.get("tagline")
                 if tagline:
