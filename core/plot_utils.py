@@ -104,6 +104,40 @@ def apply_elegant_theme(fig: go.Figure, theme: str = "light") -> go.Figure:
         grid = DARK_GRID
         axisline = DARK_AXIS
         marker_border = rgba(ACCENT_SOFT, 0.65)
+    elif theme == "high_contrast":
+        contrast_bg = "#0B0B0B"
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor=contrast_bg,
+            plot_bgcolor=contrast_bg,
+            font=dict(
+                family=get_font_stack("body"),
+                size=13,
+                color="#F7FAFF",
+            ),
+            legend=dict(
+                bgcolor="rgba(12,12,12,0.85)",
+                bordercolor="#F7FAFF",
+                borderwidth=1,
+                font=dict(color="#F7FAFF"),
+            ),
+            hoverlabel=dict(
+                bgcolor="rgba(15,15,15,0.95)",
+                bordercolor="#F7FAFF",
+                font=dict(color="#F7FAFF"),
+            ),
+            colorway=[
+                "#00AEEF",
+                "#FF8C00",
+                "#7BD389",
+                "#FF5E5B",
+                "#6C5BFB",
+                "#FFD447",
+            ],
+        )
+        grid = "rgba(255,255,255,0.55)"
+        axisline = "#FFFFFF"
+        marker_border = "#FFFFFF"
     else:
         fig.update_layout(
             template="plotly_white",

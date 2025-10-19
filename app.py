@@ -13,7 +13,6 @@ from typing import Optional, List, Dict, Tuple, Iterable, Callable, Any
 
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit.errors import StreamlitAPIException
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -125,6 +124,8 @@ PLOTLY_CONFIG = {
 PLOTLY_CONFIG["locale"] = "ja" if current_language == "ja" else "en"
 
 ICON_SVGS: Dict[str, str] = {}
+
+UI_PREF_STORAGE_KEY = "mck-ui-preferences"
 
 METRIC_EXPLANATIONS: Dict[str, Dict[str, str]] = {
     "年計総額": {
@@ -379,6 +380,117 @@ def _get_query_params() -> Dict[str, List[str]]:
                 values = [str(raw_value)]
         normalised[str(key)] = [str(v) for v in values]
     return normalised
+
+
+def _apply_query_params(params: Dict[str, List[str]]) -> None:
+    """Apply query parameters using the available Streamlit API."""
+
+    filtered = {key: values for key, values in params.items() if values}
+    query_params = getattr(st, "query_params", None)
+    if query_params is not None and hasattr(query_params, "from_dict"):
+        try:
+            query_params.from_dict(filtered)
+            return
+        except Exception:
+            pass
+
+    try:
+        kwargs: Dict[str, object] = {}
+        for key, values in filtered.items():
+            if not values:
+                continue
+            if len(values) == 1:
+                kwargs[key] = values[0]
+            else:
+                kwargs[key] = values
+        st.experimental_set_query_params(**kwargs)  # type: ignore[attr-defined]
+    except Exception:
+        return
+
+
+def _set_query_param(key: str, value: Optional[str]) -> None:
+    """Update a single query parameter while preserving others."""
+
+    params = _get_query_params()
+    if value is None:
+        if key not in params:
+            return
+        params.pop(key, None)
+    else:
+        params[key] = [value]
+    _apply_query_params(params)
+
+
+def _build_query_with_page(page_key: str) -> str:
+    """Return a URL query string pointing to ``page_key`` preserving other params."""
+
+    params = _get_query_params()
+    pairs: List[Tuple[str, str]] = []
+    for key, values in params.items():
+        if key == "page":
+            continue
+        for value in values:
+            pairs.append((key, value))
+    pairs.append(("page", page_key))
+    return "?" + urlencode(pairs)
+
+
+def _inject_ui_pref_loader() -> None:
+    """Load persisted UI preferences from ``localStorage`` into query params."""
+
+    script = f"""
+    <script>
+    (function() {{
+        const storageKey = {json.dumps(UI_PREF_STORAGE_KEY)};
+        const params = new URLSearchParams(window.location.search);
+        let changed = false;
+        try {{
+            const stored = JSON.parse(window.localStorage.getItem(storageKey) || '{{}}');
+            if (stored.theme && !params.has('ui_theme')) {{
+                params.set('ui_theme', stored.theme);
+                changed = true;
+            }}
+            if (stored.elegant !== undefined && !params.has('ui_elegant')) {{
+                params.set('ui_elegant', stored.elegant ? '1' : '0');
+                changed = true;
+            }}
+            if (stored.language && !params.has('lang')) {{
+                params.set('lang', stored.language);
+                changed = true;
+            }}
+        }} catch (err) {{
+            console.warn('Failed to read stored UI prefs', err);
+        }}
+        if (changed) {{
+            const query = params.toString();
+            const hash = window.location.hash || '';
+            const nextUrl = window.location.pathname + (query ? '?' + query : '') + hash;
+            window.location.replace(nextUrl);
+        }}
+    }})();
+    </script>
+    """
+    components.html(script, height=0)
+
+
+def _persist_ui_preferences(theme: str, elegant: bool, language: Optional[str]) -> None:
+    """Persist UI preferences to ``localStorage`` for subsequent visits."""
+
+    payload = {"theme": theme, "elegant": elegant, "language": language or ""}
+    script = f"""
+    <script>
+    (function() {{
+        try {{
+            const storageKey = {json.dumps(UI_PREF_STORAGE_KEY)};
+            const payload = {json.dumps(payload, ensure_ascii=False)};
+            window.localStorage.setItem(storageKey, JSON.stringify(payload));
+        }} catch (err) {{
+            console.warn('Failed to persist UI prefs', err);
+        }}
+    }})();
+    </script>
+    """
+    components.html(script, height=0)
 
 
 EXPENSE_FILE_CANDIDATES: Tuple[Path, ...] = (
@@ -1040,6 +1152,8 @@ APP_TITLE = t("header.title", language=current_language)
 st.set_page_config(
     page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded"
 )
+
+_inject_ui_pref_loader()
 
 
 @st.cache_data(ttl=600)
@@ -2288,13 +2402,13 @@ section[id]{ scroll-margin-top:calc(64px + var(--space-2)); }
   border:1px solid rgba(var(--accent-rgb,30,136,229),0.28);
   pointer-events:none;
 }
-section[data-testid="stSidebar"] label.tour-highlight-nav{
+[data-testid="stSidebar"] .nav-tree__link.tour-highlight-nav{
   border:1.6px solid rgba(255,255,255,0.72);
-  border-radius:12px;
-  background:rgba(255,255,255,0.18);
   box-shadow:0 0 0 3px rgba(255,255,255,0.24);
+  background:rgba(255,255,255,0.18);
+  color:#ffffff !important;
 }
-section[data-testid="stSidebar"] label.tour-highlight-nav *{
+[data-testid="stSidebar"] .nav-tree__link.tour-highlight-nav .nav-tree__text{
   color:#ffffff !important;
 }
 .tour-banner--muted .tour-banner__progress{ color:var(--muted); }
@@ -2514,8 +2628,25 @@ if "elegant_on" not in st.session_state:
     st.session_state["elegant_on"] = True
 if "dark_mode" not in st.session_state:
     st.session_state["dark_mode"] = False
+if "high_contrast" not in st.session_state:
+    st.session_state["high_contrast"] = False
 if "ui_theme" not in st.session_state:
     st.session_state["ui_theme"] = "light"
+
+ui_pref_params = _get_query_params()
+theme_param = ui_pref_params.get("ui_theme", [])
+if theme_param:
+    desired_theme = theme_param[-1]
+    if desired_theme in {"light", "dark", "high_contrast"}:
+        st.session_state["ui_theme"] = desired_theme
+        st.session_state["dark_mode"] = desired_theme == "dark"
+        st.session_state["high_contrast"] = desired_theme == "high_contrast"
+elegant_param = ui_pref_params.get("ui_elegant", [])
+if elegant_param:
+    st.session_state["elegant_on"] = elegant_param[-1] not in {"0", "false", "False"}
+lang_param = ui_pref_params.get("lang", [])
+if lang_param:
+    st.session_state["language"] = lang_param[-1]
 
 with st.container():
     control_left, control_right = st.columns([3, 1])
@@ -2530,17 +2661,32 @@ with st.container():
             )
             st.session_state["elegant_on"] = elegant_on
         with toggle_cols[1]:
-            dark_mode = st.toggle(
-                t("header.dark_mode.label", default="ダークモード"),
-                value=st.session_state.get("dark_mode", False),
-                help=t(
-                    "header.dark_mode.help",
-                    default="長時間の閲覧向けに暗色テーマへ切り替えます",
+            theme_options = [
+                ("light", t("header.theme.light", default="ライト")),
+                ("dark", t("header.theme.dark", default="ダーク")),
+                (
+                    "high_contrast",
+                    t("header.theme.high_contrast", default="ハイコントラスト"),
                 ),
-                key="mck_dark_mode_toggle",
+            ]
+            option_values = [opt[0] for opt in theme_options]
+            current_theme = st.session_state.get("ui_theme", "light")
+            if current_theme not in option_values:
+                current_theme = "light"
+            theme_choice = st.selectbox(
+                t("header.theme.selector", default="テーマ"),
+                options=option_values,
+                index=option_values.index(current_theme),
+                format_func=lambda key: dict(theme_options).get(key, key.title()),
+                help=t(
+                    "header.theme.help",
+                    default="ライト・ダーク・ハイコントラストから表示テーマを選択します",
+                ),
+                key="ui_theme_selector",
             )
-            st.session_state["dark_mode"] = dark_mode
-            st.session_state["ui_theme"] = "dark" if dark_mode else "light"
+            st.session_state["ui_theme"] = theme_choice
+            st.session_state["dark_mode"] = theme_choice == "dark"
+            st.session_state["high_contrast"] = theme_choice == "high_contrast"
     with control_right:
         language_codes = get_available_languages()
         if language_codes:
@@ -2556,12 +2702,128 @@ with st.container():
             format_func=lambda code: language_name(code),
         )
 
+_set_query_param("ui_theme", st.session_state.get("ui_theme"))
+_set_query_param(
+    "ui_elegant", "1" if st.session_state.get("elegant_on", True) else "0"
+)
+language_pref = st.session_state.get("language")
+_set_query_param("lang", language_pref if language_pref else None)
+_persist_ui_preferences(
+    st.session_state.get("ui_theme", "light"),
+    st.session_state.get("elegant_on", True),
+    language_pref,
+)
+
 elegant_on = st.session_state.get("elegant_on", True)
 dark_mode = st.session_state.get("dark_mode", False)
+high_contrast = st.session_state.get("high_contrast", False)
 
 # ===== 品格UI CSS（配色/余白/フォント/境界の見直し） =====
 if elegant_on:
-    if dark_mode:
+    if high_contrast:
+        st.markdown(
+            """
+            <style>
+              :root{
+                --text-pri:#0b0b0b;
+                --text-sec:#1b2735;
+                --text-primary:var(--text-pri);
+                --text-secondary:var(--text-sec);
+                --text-muted:#2f3d4c;
+                --surface-0:#ffffff;
+                --surface-1:#f3f6fb;
+                --surface-2:#e6eef7;
+                --surface:var(--surface-0);
+                --surface-alt:var(--surface-2);
+                --bg:var(--surface-1);
+                --bg-muted:#dde6f2;
+                --panel:var(--surface-0);
+                --panel-alt:var(--surface-2);
+                --ink:var(--text-pri);
+                --ink-subtle:var(--text-sec);
+                --muted:var(--text-muted);
+                --accent:#0057d9;
+                --accent-rgb:0,87,217;
+                --accent-soft:#d6e4ff;
+                --accent-soft-rgb:214,228,255;
+                --accent-emphasis:#ff8a00;
+                --primary:#001f4d;
+                --primary-rgb:0,31,77;
+                --border:rgba(0,0,0,0.22);
+                --border-strong:rgba(0,0,0,0.38);
+                --metric-positive:#007a3d;
+                --metric-negative:#b02121;
+                --chip-bg:#fff4d6;
+                --chip-text:#101820;
+                --chip-border:#ffb347;
+                --chip-tx:var(--chip-text);
+                --chip-bd:var(--chip-border);
+                --btn-bg:#0b0b0b;
+                --btn-tx:#ffffff;
+                --btn-bg-dis:#d1d5db;
+                --btn-tx-dis:#6b7280;
+                --focus:#ff8a00;
+                --focus-ring:var(--focus);
+              }
+              body, .stApp, [data-testid="stAppViewContainer"]{ background:var(--bg) !important; color:var(--ink) !important; }
+              [data-testid="stHeader"]{
+                background:linear-gradient(90deg,#001f4d 0%,#004e98 100%);
+                border-bottom:2px solid rgba(0,87,217,0.45);
+              }
+              [data-testid="stHeader"] *{ color:#ffffff !important; }
+              [data-testid="stSidebar"]{
+                background:linear-gradient(180deg,#001530 0%,#0b2f59 100%);
+                color:#f7fbff;
+              }
+              [data-testid="stSidebar"] .nav-tree__section{
+                border-color:rgba(0,0,0,0.18);
+                background:rgba(255,255,255,0.9);
+                box-shadow:0 14px 28px rgba(0,31,77,0.18);
+              }
+              [data-testid="stSidebar"] .nav-tree__link{
+                border-color:rgba(0,0,0,0.18);
+                background:rgba(255,255,255,0.92);
+                color:#101820;
+              }
+              [data-testid="stSidebar"] .nav-tree__text{ color:inherit; }
+              [data-testid="stSidebar"] .nav-tree__caption{ color:#1b2735; }
+              [data-testid="stSidebar"] .nav-tree__item.is-active .nav-tree__link{
+                background:#ffeedb;
+                border-color:var(--accent-emphasis);
+                color:#0b0b0b;
+              }
+              [data-testid="stSidebar"] .nav-tree__icon{
+                background:#0b0b0b;
+                color:#ffffff;
+              }
+              .chart-card, .stDataFrame{
+                border:2px solid rgba(0,0,0,0.24) !important;
+                box-shadow:0 16px 34px rgba(0,31,77,0.2) !important;
+              }
+              .stTabs [data-baseweb="tab"]{
+                background:#ffffff;
+                border-color:rgba(0,0,0,0.22);
+                color:#0b0b0b;
+              }
+              .stTabs [aria-selected="true"]{
+                background:var(--accent);
+                color:#ffffff;
+                border-color:var(--accent);
+              }
+              .stButton>button{
+                border:2px solid var(--accent);
+                background:var(--accent);
+                color:#ffffff;
+              }
+              .stButton>button:hover{
+                background:var(--accent-emphasis);
+                border-color:var(--accent-emphasis);
+              }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    elif dark_mode:
         st.markdown(
             """
             <style>
@@ -3099,6 +3361,8 @@ if "data_monthly" not in st.session_state:
     st.session_state.data_monthly = None  # long-form DF
 if "data_year" not in st.session_state:
     st.session_state.data_year = None
+if "data_loaded" not in st.session_state:
+    st.session_state.data_loaded = False
 if "settings" not in st.session_state:
     default_template = INDUSTRY_TEMPLATES.get(DEFAULT_TEMPLATE_KEY, {})
     template_defaults = default_template.get("settings", {})
@@ -3980,16 +4244,27 @@ def render_onboarding_modal() -> None:
     if not st.session_state.get("show_onboarding_modal", True):
         return
     with compat_modal("クイックスタートガイド", key="onboarding_modal"):
-        st.write("数分で主要なワークフローを体験できます。下記の流れで操作を進めましょう。")
+        header_cols = st.columns([4, 1])
+        with header_cols[1]:
+            if st.button("✕ 閉じる", key="onboarding_close", help="ガイドを閉じます。"):
+                st.session_state.onboarding_seen = True
+                st.session_state.show_onboarding_modal = False
+                st.rerun()
+
+        st.markdown("数分で操作感を掴めるよう、まずは次の2ステップだけを試してみましょう。")
         st.markdown(
-            "- **データ取込** — サンプルや自社データをアップロードして分析を有効化\n"
-            "- **ダッシュボード** — KPIカードとAIサマリーで全体像を確認\n"
-            "- **分析ツール** — ランキングや比較ビューで気になるSKUを深掘り"
+            "1. **データ管理ページでアップロード** — サンプルデータまたは自社データを取り込んで分析を有効化\n"
+            "2. **ランキングや比較ビューを開く** — サイドバーのリンク（または URL の `?page=ranking` など）から直接アクセスして動きを確認"
         )
-        st.caption("ヒント: メニューのアイコンやボタンにカーソルを合わせると詳細のツールチップが表示されます。")
-        start_col, skip_col = st.columns(2)
-        if start_col.button(
-            "ツアーを開始",
+        st.caption(
+            "ヒント: サイドバーの各リンクにマウスオーバーすると、機能の説明ツールチップが表示されます。"
+        )
+
+        import_href = _build_query_with_page("import")
+        help_href = _build_query_with_page("help")
+        action_cols = st.columns([1, 1, 1])
+        if action_cols[0].button(
+            "操作ツアーを開始",
             key="onboarding_start",
             help="基礎編から順に案内する操作ツアーを開始します。",
         ):
@@ -4001,14 +4276,18 @@ def render_onboarding_modal() -> None:
             if TOUR_STEPS:
                 st.session_state.tour_pending_nav = TOUR_STEPS[0]["nav_key"]
             st.rerun()
-        if skip_col.button(
-            "あとで見る",
-            key="onboarding_skip",
-            help="オンボーディングを閉じて通常画面に進みます。",
-        ):
-            st.session_state.onboarding_seen = True
-            st.session_state.show_onboarding_modal = False
-            st.rerun()
+        action_cols[1].link_button(
+            "データ管理を開く",
+            import_href,
+            help="データ取込ページを別タブで表示します。",
+            use_container_width=True,
+        )
+        action_cols[2].link_button(
+            "詳細ガイドへ",
+            help_href,
+            help="より詳しいチュートリアルとFAQを表示します。",
+            use_container_width=True,
+        )
 
 
 def get_current_tour_step() -> Optional[Dict[str, str]]:
@@ -4243,11 +4522,14 @@ def apply_tour_highlight(step: Optional[Dict[str, str]]) -> None:
             sidebar.querySelectorAll('.tour-highlight-nav').forEach((el) => el.classList.remove('tour-highlight-nav'));
             let target = null;
             if (STEP.navKey) {{
-                target = sidebar.querySelector(`label[data-nav-key="${{STEP.navKey}}"]`);
+                const item = sidebar.querySelector(`.nav-tree__item[data-nav-key="${{STEP.navKey}}"]`);
+                if (item) {{
+                    target = item.querySelector('.nav-tree__link');
+                }}
             }}
             if (!target && STEP.label) {{
-                const labels = Array.from(sidebar.querySelectorAll('label'));
-                target = labels.find((el) => normalize(el.innerText) === normalize(STEP.label));
+                const links = Array.from(sidebar.querySelectorAll('.nav-tree__link'));
+                target = links.find((el) => normalize(el.innerText) === normalize(STEP.label));
             }}
             if (target) {{
                 target.classList.add('tour-highlight-nav');
@@ -4410,6 +4692,7 @@ def process_long_dataframe(long_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Data
 
     st.session_state.data_monthly = normalized
     st.session_state.data_year = year_df
+    st.session_state.data_loaded = True
     return normalized, year_df
 
 
@@ -6819,26 +7102,75 @@ st.markdown(
       font-size:0.75rem;
       color:rgba(255,255,255,0.68);
     }
-    [data-testid="stSidebar"] label.nav-pill{
+    [data-testid="stSidebar"] .nav-tree{
       display:flex;
-      align-items:flex-start;
-      gap:0.75rem;
-      padding:0.85rem 0.95rem;
+      flex-direction:column;
+      gap:1rem;
+      margin:0 0 1.2rem;
+    }
+    [data-testid="stSidebar"] .nav-tree__section{
+      padding:0.75rem 0.85rem 0.9rem;
       border-radius:16px;
       border:1px solid rgba(255,255,255,0.16);
       background:rgba(255,255,255,0.06);
-      margin-bottom:0.5rem;
       box-shadow:0 14px 26px rgba(7,32,54,0.28);
+    }
+    [data-testid="stSidebar"] .nav-tree__heading{
+      font-size:0.9rem;
+      font-weight:700;
+      margin:0 0 0.6rem;
+      letter-spacing:.04em;
+      color:#ffffff;
       position:relative;
-      transition:transform .12s ease, border-color .12s ease, background-color .12s ease, box-shadow .12s ease;
+      padding-bottom:0.35rem;
+      border-bottom:2px solid rgba(255,255,255,0.12);
     }
-    [data-testid="stSidebar"] label.nav-pill:hover{
-      transform:translateY(-2px);
-      border-color:rgba(255,255,255,0.4);
-      background:rgba(255,255,255,0.12);
-      box-shadow:0 18px 32px rgba(7,32,54,0.34);
+    [data-testid="stSidebar"] .nav-tree__heading::after{
+      content:"";
+      position:absolute;
+      left:0;
+      bottom:-2px;
+      width:52px;
+      height:2px;
+      border-radius:999px;
+      background:var(--nav-section-accent, rgba(255,255,255,0.4));
     }
-    [data-testid="stSidebar"] label.nav-pill .nav-pill__icon{
+    [data-testid="stSidebar"] .nav-tree__list{
+      list-style:none;
+      margin:0;
+      padding:0;
+      display:flex;
+      flex-direction:column;
+      gap:0.35rem;
+    }
+    [data-testid="stSidebar"] .nav-tree__item{
+      margin:0;
+    }
+    [data-testid="stSidebar"] .nav-tree__link{
+      display:flex;
+      align-items:center;
+      gap:0.75rem;
+      text-decoration:none;
+      padding:0.65rem 0.75rem;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,0.14);
+      background:rgba(255,255,255,0.03);
+      color:rgba(255,255,255,0.85);
+      transition:background .15s ease, border-color .15s ease, transform .15s ease;
+    }
+    [data-testid="stSidebar"] .nav-tree__link:hover{
+      background:rgba(255,255,255,0.1);
+      border-color:rgba(255,255,255,0.35);
+      color:#ffffff;
+      transform:translateX(2px);
+    }
+    [data-testid="stSidebar"] .nav-tree__item.is-active .nav-tree__link{
+      border-color:var(--nav-section-accent, rgba(255,255,255,0.6));
+      background:rgba(255,255,255,0.18);
+      box-shadow:0 18px 32px rgba(7,32,54,0.36);
+      color:#ffffff;
+    }
+    [data-testid="stSidebar"] .nav-tree__icon{
       width:2rem;
       height:2rem;
       border-radius:50%;
@@ -6846,69 +7178,23 @@ st.markdown(
       align-items:center;
       justify-content:center;
       font-size:1rem;
-      background:rgba(var(--nav-accent-rgb,71,183,212),0.18);
-      border:2px solid rgba(var(--nav-accent-rgb,71,183,212),0.45);
-      box-shadow:0 10px 20px rgba(var(--nav-accent-rgb,71,183,212),0.35);
+      background:rgba(255,255,255,0.12);
       color:#ffffff;
       flex-shrink:0;
     }
-    [data-testid="stSidebar"] label.nav-pill .nav-pill__icon svg{
-      width:18px;
-      height:18px;
+    [data-testid="stSidebar"] .nav-tree__item.is-active .nav-tree__icon{
+      background:var(--nav-section-accent, rgba(255,255,255,0.2));
+      box-shadow:0 10px 24px rgba(7,32,54,0.38);
     }
-    [data-testid="stSidebar"] label.nav-pill .nav-pill__body{
-      display:flex;
-      flex-direction:column;
-      gap:0.2rem;
+    [data-testid="stSidebar"] .nav-tree__text{
+      font-size:0.95rem;
+      font-weight:600;
     }
-    [data-testid="stSidebar"] label.nav-pill .nav-pill__badge{
-      display:inline-flex;
-      align-items:center;
-      justify-content:flex-start;
-      gap:0.3rem;
+    [data-testid="stSidebar"] .nav-tree__caption{
+      margin:0.6rem 0 0;
       font-size:0.75rem;
-      font-weight:700;
-      padding:0.18rem 0.55rem;
-      border-radius:999px;
-      background:rgba(var(--nav-accent-rgb,71,183,212),0.28);
-      color:#ffffff;
-      width:max-content;
-      letter-spacing:.06em;
-    }
-    [data-testid="stSidebar"] label.nav-pill .nav-pill__badge:empty{
-      display:none;
-    }
-    [data-testid="stSidebar"] label.nav-pill .nav-pill__title{
-      font-size:1rem;
-      font-weight:700;
-      color:#f8fbff !important;
-      line-height:1.2;
-    }
-    [data-testid="stSidebar"] label.nav-pill .nav-pill__desc{
-      font-size:0.85rem;
-      line-height:1.35;
-      color:rgba(255,255,255,0.82) !important;
-    }
-    [data-testid="stSidebar"] label.nav-pill .nav-pill__desc:empty{
-      display:none;
-    }
-    [data-testid="stSidebar"] label.nav-pill.nav-pill--active{
-      border-color:rgba(var(--nav-accent-rgb,71,183,212),0.65);
-      background:rgba(var(--nav-accent-rgb,71,183,212),0.25);
-      box-shadow:0 20px 36px rgba(var(--nav-accent-rgb,71,183,212),0.48);
-    }
-    [data-testid="stSidebar"] label.nav-pill.nav-pill--active .nav-pill__icon{
-      background:rgba(var(--nav-accent-rgb,71,183,212),0.35);
-      border-color:rgba(var(--nav-accent-rgb,71,183,212),0.85);
-    }
-    [data-testid="stSidebar"] label.nav-pill.nav-pill--active .nav-pill__badge{
-      background:rgba(var(--nav-accent-rgb,71,183,212),0.55);
-    }
-    [data-testid="stSidebar"] label.nav-pill.nav-pill--active .nav-pill__title{
-      color:#ffffff !important;
-    }
-    [data-testid="stSidebar"] label.nav-pill.nav-pill--active .nav-pill__desc{
-      color:rgba(255,255,255,0.92) !important;
+      line-height:1.4;
+      color:rgba(255,255,255,0.7);
     }
     .has-tooltip{
       position:relative;
@@ -7433,10 +7719,9 @@ st.markdown(
       .nav-open [data-testid="stSidebar"]{ transform:translateX(0); }
       .mobile-nav-toggle{ display:flex; }
       [data-testid="stSidebar"] .sidebar-app-brand{ margin-top:var(--space-4); }
-      [data-testid="stSidebar"] label.nav-pill{ padding:1rem 1.1rem; }
-      [data-testid="stSidebar"] label.nav-pill .nav-pill__icon{ width:2.2rem; height:2.2rem; font-size:1.1rem; }
-      [data-testid="stSidebar"] label.nav-pill .nav-pill__title{ font-size:1.05rem; }
-      [data-testid="stSidebar"] label.nav-pill .nav-pill__desc{ font-size:0.95rem; }
+      [data-testid="stSidebar"] .nav-tree__link{ padding:0.75rem 0.85rem; }
+      [data-testid="stSidebar"] .nav-tree__icon{ width:2.2rem; height:2.2rem; font-size:1.1rem; }
+      [data-testid="stSidebar"] .nav-tree__text{ font-size:1.05rem; }
       .stButton>button{
         padding:0.75rem 1.2rem;
         font-size:1.05rem;
@@ -7619,111 +7904,79 @@ NAV_KEYS = [page["key"] for page in SIDEBAR_PAGES]
 NAV_TITLE_LOOKUP = {page["key"]: page["title"] for page in SIDEBAR_PAGES}
 page_lookup = {page["key"]: page["page"] for page in SIDEBAR_PAGES}
 
-PRIMARY_NAV_MENU = [
-    {
-        "key": "dashboard",
-        "label": SIDEBAR_PAGE_LOOKUP["executive"]["title"],
-        "icon": SIDEBAR_PAGE_LOOKUP["executive"].get("icon", "💼"),
-        "description": "KGI/KPIを1画面で俯瞰できる経営ダッシュボードです。",
-        "pages": ["executive"],
-    },
-    {
-        "key": "ranking",
-        "label": SIDEBAR_PAGE_LOOKUP["ranking"]["title"],
-        "icon": SIDEBAR_PAGE_LOOKUP["ranking"].get("icon", "📊"),
-        "description": SIDEBAR_PAGE_LOOKUP["ranking"].get("tooltip", ""),
-        "pages": ["ranking"],
-    },
-    {
-        "key": "analysis",
-        "label": "分析ツール",
-        "icon": SIDEBAR_PAGE_LOOKUP["compare"].get("icon", "🔍"),
-        "description": "比較ビューやSKU詳細、相関分析などの深掘り分析を行います。",
-        "pages": ["dashboard", "compare", "detail", "correlation", "category"],
-    },
-    {
-        "key": "data",
-        "label": "データ管理",
-        "icon": SIDEBAR_PAGE_LOOKUP["import"].get("icon", "📥"),
-        "description": "アップロード、テンプレート選択、保存ビューを集約したデータ管理ハブです。",
-        "pages": ["import", "settings", "saved"],
-    },
-    {
-        "key": "alerts",
-        "label": "アラート",
-        "icon": SIDEBAR_PAGE_LOOKUP["alert"].get("icon", "🚨"),
-        "description": "閾値アラートと異常検知でリスクサインを把握します。",
-        "pages": ["alert", "anomaly"],
-    },
-    {
-        "key": "help",
-        "label": SIDEBAR_PAGE_LOOKUP["help"]["title"],
-        "icon": SIDEBAR_PAGE_LOOKUP["help"].get("icon", "❓"),
-        "description": SIDEBAR_PAGE_LOOKUP["help"].get("tooltip", ""),
-        "pages": ["help"],
-    },
-]
+def render_navigation_tree(active_page: str) -> None:
+    """Render the sidebar navigation tree with hierarchical grouping."""
 
-PRIMARY_NAV_LOOKUP = {item["key"]: item for item in PRIMARY_NAV_MENU}
-PAGE_TO_PRIMARY_LOOKUP: Dict[str, str] = {}
-for item in PRIMARY_NAV_MENU:
-    pages = list(dict.fromkeys(item.get("pages", [])))
-    item["pages"] = pages
-    for page_key in pages:
-        if page_key in SIDEBAR_PAGE_LOOKUP:
-            PAGE_TO_PRIMARY_LOOKUP[page_key] = item["key"]
+    base_pairs: List[Tuple[str, str]] = []
+    params = _get_query_params()
+    for key, values in params.items():
+        if key == "page":
+            continue
+        for value in values:
+            base_pairs.append((key, value))
 
-PRIMARY_NAV_CLIENT_DATA: List[Dict[str, object]] = []
-for item in PRIMARY_NAV_MENU:
-    page_titles = {
-        page_key: NAV_TITLE_LOOKUP.get(
-            page_key,
-            SIDEBAR_PAGE_LOOKUP.get(page_key, {}).get("title", page_key),
+    sections: List[str] = []
+    for category_key in SIDEBAR_CATEGORY_ORDER:
+        pages = [meta for meta in SIDEBAR_PAGES if meta.get("category") == category_key]
+        if not pages:
+            continue
+        category_meta = SIDEBAR_CATEGORY_STYLES.get(category_key, {})
+        heading = html.escape(category_meta.get("label", category_key.title()))
+        description = html.escape(category_meta.get("description", ""))
+        accent = html.escape(category_meta.get("color", PRIMARY_COLOR))
+        items: List[str] = []
+        for page_meta in pages:
+            page_key = page_meta["key"]
+            label = html.escape(page_meta.get("title", page_key))
+            icon = html.escape(page_meta.get("icon", ""))
+            tooltip = page_meta.get("tooltip") or page_meta.get("tagline") or ""
+            tooltip_attr = html.escape(tooltip)
+            link_pairs = list(base_pairs)
+            link_pairs.append(("page", page_key))
+            href = "?" + urlencode(link_pairs)
+            is_active = page_key == active_page
+            classes = ["nav-tree__item"]
+            if is_active:
+                classes.append("is-active")
+            aria_current = "page" if is_active else "false"
+            items.append(
+                """
+                <li class="{classes}" data-nav-key="{nav_key}">
+                  <a class="nav-tree__link has-tooltip" href="{href}" title="{tooltip}" data-tooltip="{tooltip}" aria-current="{aria}" aria-label="{label}">
+                    <span class="nav-tree__icon" aria-hidden="true">{icon}</span>
+                    <span class="nav-tree__text">{label}</span>
+                  </a>
+                </li>
+                """.format(
+                    classes=" ".join(classes),
+                    nav_key=html.escape(page_key),
+                    href=html.escape(href, quote=True),
+                    tooltip=tooltip_attr,
+                    aria=aria_current,
+                    icon=icon,
+                    label=label,
+                )
+            )
+        sections.append(
+            """
+            <section class="nav-tree__section" data-category-key="{category}" style="--nav-section-accent:{accent};">
+              <h4 class="nav-tree__heading">{heading}</h4>
+              <ul class="nav-tree__list">{items}</ul>
+              <p class="nav-tree__caption">{description}</p>
+            </section>
+            """.format(
+                category=html.escape(category_key),
+                accent=accent,
+                heading=heading,
+                items="".join(items),
+                description=description,
+            )
         )
-        for page_key in item["pages"]
-    }
-    page_tooltips = {
-        page_key: (
-            SIDEBAR_PAGE_LOOKUP.get(page_key, {}).get("tooltip")
-            or SIDEBAR_PAGE_LOOKUP.get(page_key, {}).get("tagline", "")
-        )
-        for page_key in item["pages"]
-    }
-    PRIMARY_NAV_CLIENT_DATA.append(
-        {
-            "key": item["key"],
-            "label": item["label"],
-            "icon": item.get("icon", ""),
-            "description": item.get("description", ""),
-            "pages": item["pages"],
-            "page_titles": page_titles,
-            "page_tooltips": page_tooltips,
-        }
+
+    st.sidebar.markdown(
+        "<nav class='nav-tree'>" + "".join(sections) + "</nav>",
+        unsafe_allow_html=True,
     )
-
-NAV_CATEGORY_STATE_KEY = "nav_category"
-PENDING_NAV_CATEGORY_KEY = "_pending_nav_category"
-PENDING_NAV_PAGE_KEY = "_pending_nav_page"
-NAV_PRIMARY_STATE_KEY = "nav_primary"
-PENDING_NAV_PRIMARY_KEY = "_pending_nav_primary"
-PENDING_NAV_SUB_PREFIX = "_pending_nav_sub_"
-
-
-def _queue_nav_category(category: Optional[str], *, rerun_on_lock: bool = False) -> None:
-    if not category:
-        return
-    current_category = st.session_state.get(NAV_CATEGORY_STATE_KEY)
-    pending_category = st.session_state.get(PENDING_NAV_CATEGORY_KEY)
-    if current_category == category:
-        if pending_category:
-            st.session_state.pop(PENDING_NAV_CATEGORY_KEY, None)
-        return
-    if pending_category != category:
-        st.session_state[PENDING_NAV_CATEGORY_KEY] = category
-    if NAV_CATEGORY_STATE_KEY not in st.session_state:
-        st.session_state[NAV_CATEGORY_STATE_KEY] = category
-    if rerun_on_lock:
-        st.rerun()
 
 
 def set_active_page(
@@ -7731,40 +7984,21 @@ def set_active_page(
     *,
     rerun_on_lock: bool = False,
     trigger_rerun: Optional[bool] = None,
+    update_url: bool = True,
 ) -> None:
-    meta = SIDEBAR_PAGE_LOOKUP.get(page_key)
-    if not meta:
+    """Record the requested page and optionally persist it to the URL."""
+
+    if page_key not in SIDEBAR_PAGE_LOOKUP:
         return
-    category = meta.get("category")
-    rerun_required = False
-    try:
-        st.session_state["nav_page"] = page_key
-    except StreamlitAPIException:
-        st.session_state[PENDING_NAV_PAGE_KEY] = page_key
-        rerun_required = True
-    primary_key = PAGE_TO_PRIMARY_LOOKUP.get(page_key)
-    if primary_key:
-        sub_state_key = f"nav_sub_{primary_key}"
-        try:
-            st.session_state[sub_state_key] = page_key
-        except StreamlitAPIException:
-            st.session_state[f"{PENDING_NAV_SUB_PREFIX}{primary_key}"] = page_key
-            rerun_required = True
-        try:
-            st.session_state[NAV_PRIMARY_STATE_KEY] = primary_key
-        except StreamlitAPIException:
-            st.session_state[PENDING_NAV_PRIMARY_KEY] = primary_key
-            rerun_required = True
-    if category:
-        _queue_nav_category(
-            category,
-            rerun_on_lock=rerun_on_lock and not rerun_required,
-        )
-    if trigger_rerun is None:
-        trigger_rerun = rerun_on_lock
-    should_rerun = (rerun_required and rerun_on_lock) or trigger_rerun
-    if should_rerun:
-        st.rerun()
+
+    current = st.session_state.get("nav_page")
+    if current and current != page_key:
+        st.session_state["previous_page_key"] = current
+
+    st.session_state["nav_page"] = page_key
+
+    if update_url:
+        _set_query_param("page", page_key)
 
 
 def _hex_to_rgb_string(color: str) -> str:
@@ -8968,293 +9202,86 @@ def render_navigation_actions(active_page_key: str) -> None:
             )
         st.markdown("</div>", unsafe_allow_html=True)
 if st.session_state.get("tour_active", True) and TOUR_STEPS:
-    initial_idx = max(0, min(st.session_state.get("tour_step_index", 0), len(TOUR_STEPS) - 1))
+    initial_idx = max(
+        0, min(st.session_state.get("tour_step_index", 0), len(TOUR_STEPS) - 1)
+    )
     default_key = TOUR_STEPS[initial_idx]["nav_key"]
     if default_key not in NAV_KEYS:
         default_key = NAV_KEYS[0]
 else:
     default_key = NAV_KEYS[0]
 
+query_page_values = _get_query_params().get("page", [])
+requested_page_key: Optional[str] = None
+for candidate in reversed(query_page_values):
+    if candidate in NAV_KEYS:
+        requested_page_key = candidate
+        break
+
+tour_pending_key = st.session_state.pop("tour_pending_nav", None)
+if tour_pending_key and tour_pending_key in NAV_KEYS:
+    requested_page_key = tour_pending_key
+
 if "nav_page" not in st.session_state:
-    set_active_page(default_key)
-
-pending_nav_page = st.session_state.pop(PENDING_NAV_PAGE_KEY, None)
-if pending_nav_page in NAV_KEYS:
-    set_active_page(pending_nav_page)
-
-if "tour_pending_nav" in st.session_state:
-    pending = st.session_state.pop("tour_pending_nav")
-    if pending in NAV_KEYS:
-        set_active_page(pending)
+    initial_key = requested_page_key or default_key
+    set_active_page(initial_key, update_url=requested_page_key is None)
 
 current_page_key = st.session_state.get("nav_page", default_key)
-current_meta = SIDEBAR_PAGE_LOOKUP.get(current_page_key, {})
-default_category = current_meta.get("category")
-pending_nav_category = st.session_state.pop(PENDING_NAV_CATEGORY_KEY, None)
-if pending_nav_category:
-    st.session_state[NAV_CATEGORY_STATE_KEY] = pending_nav_category
-if NAV_CATEGORY_STATE_KEY not in st.session_state:
-    if default_category:
-        st.session_state[NAV_CATEGORY_STATE_KEY] = default_category
-    elif used_category_keys:
-        st.session_state[NAV_CATEGORY_STATE_KEY] = used_category_keys[0]
 
-pending_nav_primary = st.session_state.pop(PENDING_NAV_PRIMARY_KEY, None)
-if pending_nav_primary in PRIMARY_NAV_LOOKUP:
-    st.session_state[NAV_PRIMARY_STATE_KEY] = pending_nav_primary
+if requested_page_key and requested_page_key != current_page_key:
+    set_active_page(requested_page_key, update_url=False)
+    current_page_key = requested_page_key
 
-current_primary_default = PAGE_TO_PRIMARY_LOOKUP.get(
-    current_page_key, PRIMARY_NAV_MENU[0]["key"]
-)
-if (
-    NAV_PRIMARY_STATE_KEY not in st.session_state
-    or st.session_state[NAV_PRIMARY_STATE_KEY] not in PRIMARY_NAV_LOOKUP
-):
-    st.session_state[NAV_PRIMARY_STATE_KEY] = current_primary_default
-
-for item in PRIMARY_NAV_MENU:
-    state_key = f"nav_sub_{item['key']}"
-    pending_sub_key = f"{PENDING_NAV_SUB_PREFIX}{item['key']}"
-    pending_value = st.session_state.pop(pending_sub_key, None)
-    if state_key not in st.session_state and item["pages"]:
-        st.session_state[state_key] = item["pages"][0]
-    if pending_value is not None and pending_value in item["pages"]:
-        st.session_state[state_key] = pending_value
-    if current_page_key in item["pages"]:
-        st.session_state[state_key] = current_page_key
-
-def _format_primary_label(key: str) -> str:
-    item = PRIMARY_NAV_LOOKUP.get(key, {})
-    icon = (item.get("icon") or "").strip()
-    label = item.get("label", key)
-    active_page = st.session_state.get("nav_page", current_page_key)
-    if item.get("pages") and len(item["pages"]) > 1 and active_page in item["pages"]:
-        sub_label = NAV_TITLE_LOOKUP.get(active_page, active_page)
-        combined = f"{label}｜{sub_label}" if sub_label else label
-    else:
-        combined = label
-    return f"{icon} {combined}".strip()
-
-primary_keys = [item["key"] for item in PRIMARY_NAV_MENU]
-selected_primary = st.sidebar.radio(
-    "メインメニュー",
-    primary_keys,
-    key=NAV_PRIMARY_STATE_KEY,
-    format_func=_format_primary_label,
-)
-
-primary_item = PRIMARY_NAV_LOOKUP.get(selected_primary, PRIMARY_NAV_MENU[0])
-primary_pages = primary_item.get("pages", [])
-if not primary_pages:
-    primary_pages = [current_page_key]
-
-target_page_key = primary_pages[0]
-sub_state_key = f"nav_sub_{selected_primary}"
-if len(primary_pages) > 1:
-    current_sub_value = st.session_state.get(sub_state_key, primary_pages[0])
-    if current_sub_value not in primary_pages:
-        current_sub_value = primary_pages[0]
-        st.session_state[sub_state_key] = current_sub_value
-    target_page_key = st.sidebar.selectbox(
-        "表示する機能",
-        primary_pages,
-        key=sub_state_key,
-        format_func=lambda key: NAV_TITLE_LOOKUP.get(key, key),
-        help=primary_item.get("description", "このメニューに含まれる機能を選択します。"),
-    )
-else:
-    if primary_item.get("description"):
-        st.sidebar.caption(primary_item["description"])
-    target_page_key = primary_pages[0]
-
-if target_page_key not in NAV_KEYS:
-    target_page_key = current_page_key
-
-if st.session_state.get("nav_page") != target_page_key:
-    set_active_page(target_page_key, rerun_on_lock=True)
-
-page_key = st.session_state.get("nav_page", target_page_key)
-previous_key = st.session_state.get("current_page_key")
-if previous_key and previous_key != page_key:
-    st.session_state["previous_page_key"] = previous_key
-st.session_state["current_page_key"] = page_key
+page_key = current_page_key
 page = page_lookup[page_key]
 page_meta = SIDEBAR_PAGE_LOOKUP.get(page_key, {})
-current_category = page_meta.get("category")
-if current_category and st.session_state.get("nav_category") != current_category:
-    _queue_nav_category(current_category, rerun_on_lock=True)
+
+render_navigation_tree(page_key)
 if page_meta.get("tagline"):
     st.sidebar.caption(page_meta["tagline"])
-current_page_key = page_key
 
-nav_script_payload = json.dumps(
-    {
-        "items": PRIMARY_NAV_CLIENT_DATA,
-        "activePage": page_key,
-        "activePrimary": PAGE_TO_PRIMARY_LOOKUP.get(page_key, selected_primary),
-    },
-    ensure_ascii=False,
+components.html(
+    """
+    <script>
+    (function() {
+        const doc = window.parent.document;
+        const setup = () => {
+            const root = doc.documentElement;
+            if (!root) return;
+            let toggle = doc.querySelector('.mobile-nav-toggle');
+            if (!toggle) {
+                toggle = doc.createElement('button');
+                toggle.className = 'mobile-nav-toggle';
+                toggle.type = 'button';
+                toggle.setAttribute('aria-label', 'メニューを開閉');
+                toggle.innerHTML = '<span></span><span></span><span></span>';
+                toggle.addEventListener('click', () => {
+                    root.classList.toggle('nav-open');
+                });
+                const host = doc.querySelector('header') || doc.body;
+                host.appendChild(toggle);
+            }
+            let overlay = doc.querySelector('.nav-overlay');
+            if (!overlay) {
+                overlay = doc.createElement('div');
+                overlay.className = 'nav-overlay';
+                doc.body.appendChild(overlay);
+                overlay.addEventListener('click', () => root.classList.remove('nav-open'));
+            }
+            const links = doc.querySelectorAll('section[data-testid="stSidebar"] .nav-tree__link');
+            links.forEach((link) => {
+                if (!link.dataset.navEnhanced) {
+                    link.addEventListener('click', () => root.classList.remove('nav-open'));
+                    link.dataset.navEnhanced = 'true';
+                }
+            });
+        };
+        setTimeout(setup, 100);
+    })();
+    </script>
+    """,
+    height=0,
 )
-nav_script_template = """
-<script>
-const NAV_PRIMARY = {payload};
-(function() {
-    const doc = window.parent.document;
-    const ensureToggle = () => {
-        const root = doc.documentElement;
-        if (!root) return;
-        let toggle = doc.querySelector('.mobile-nav-toggle');
-        if (!toggle) {
-            toggle = doc.createElement('button');
-            toggle.className = 'mobile-nav-toggle';
-            toggle.type = 'button';
-            toggle.setAttribute('aria-label', 'メニューを開閉');
-            toggle.innerHTML = '<span></span><span></span><span></span>';
-            toggle.addEventListener('click', () => {
-                root.classList.toggle('nav-open');
-            });
-            const host = doc.querySelector('header') || doc.body;
-            host.appendChild(toggle);
-        }
-        let overlay = doc.querySelector('.nav-overlay');
-        if (!overlay) {
-            overlay = doc.createElement('div');
-            overlay.className = 'nav-overlay';
-            doc.body.appendChild(overlay);
-            overlay.addEventListener('click', () => {
-                root.classList.remove('nav-open');
-            });
-        }
-    };
-    const apply = (attempt = 0) => {
-        const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
-        if (!sidebar) {
-            if (attempt < 12) {
-                setTimeout(() => apply(attempt + 1), 140);
-            }
-            return;
-        }
-        const radioGroup = sidebar.querySelector('div[data-baseweb="radio"]');
-        if (radioGroup) {
-            const labels = Array.from(radioGroup.querySelectorAll('label'));
-            const metaByKey = Object.fromEntries(NAV_PRIMARY.items.map((item) => [item.key, item]));
-            const updateActive = () => {
-                labels.forEach((label) => {
-                    const input = label.querySelector('input[type="radio"]');
-                    if (!input) return;
-                    const key = input.value;
-                    label.classList.toggle('nav-pill--active', input.checked || key === NAV_PRIMARY.activePrimary);
-                });
-            };
-            labels.forEach((label) => {
-                const input = label.querySelector('input[type="radio"]');
-                if (!input) return;
-                const key = input.value;
-                const meta = metaByKey[key];
-                if (!meta) return;
-                label.classList.add('nav-pill');
-                let iconSpan = label.querySelector('.nav-pill__icon');
-                if (!iconSpan) {
-                    iconSpan = doc.createElement('span');
-                    iconSpan.className = 'nav-pill__icon';
-                    iconSpan.setAttribute('aria-hidden', 'true');
-                    label.insertBefore(iconSpan, label.firstChild);
-                }
-                iconSpan.textContent = meta.icon || '';
-                let bodySpan = label.querySelector('.nav-pill__body');
-                if (!bodySpan) {
-                    bodySpan = doc.createElement('span');
-                    bodySpan.className = 'nav-pill__body';
-                    while (label.childNodes.length > 1) {
-                        bodySpan.appendChild(label.childNodes[1]);
-                    }
-                    label.appendChild(bodySpan);
-                }
-                let titleEl = bodySpan.querySelector('.nav-pill__title');
-                if (!titleEl) {
-                    titleEl = doc.createElement('span');
-                    titleEl.className = 'nav-pill__title';
-                    bodySpan.insertBefore(titleEl, bodySpan.firstChild);
-                }
-                titleEl.textContent = meta.label || '';
-                let descEl = bodySpan.querySelector('.nav-pill__desc');
-                if (!descEl) {
-                    descEl = doc.createElement('span');
-                    descEl.className = 'nav-pill__desc';
-                    bodySpan.appendChild(descEl);
-                }
-                const activePage = NAV_PRIMARY.activePage;
-                if (meta.pages && meta.pages.length > 1 && meta.pages.includes(activePage)) {
-                    const subLabel = meta.page_titles ? (meta.page_titles[activePage] || '') : '';
-                    descEl.textContent = subLabel;
-                    label.classList.add('nav-pill--has-sub');
-                } else {
-                    descEl.textContent = '';
-                    label.classList.remove('nav-pill--has-sub');
-                }
-                const tooltipParts = [];
-                if (meta.description) {
-                    tooltipParts.push(meta.description);
-                }
-                if (meta.pages && meta.pages.length > 1) {
-                    const titles = meta.pages
-                        .map((page) => (meta.page_titles ? (meta.page_titles[page] || '') : ''))
-                        .filter(Boolean);
-                    if (titles.length) {
-                        tooltipParts.push(titles.join(' / '));
-                    }
-                } else if (meta.pages && meta.pages.length === 1) {
-                    const single = meta.pages[0];
-                    const tip = meta.page_tooltips ? (meta.page_tooltips[single] || '') : '';
-                    if (tip) {
-                        tooltipParts.push(tip);
-                    }
-                }
-                const tooltipText = tooltipParts.join('\n').trim();
-                const ariaLabel = tooltipText ? `${meta.label}: ${tooltipText}` : meta.label;
-                label.setAttribute('title', tooltipText || meta.label || '');
-                label.dataset.tooltip = tooltipText;
-                input.setAttribute('aria-label', ariaLabel || meta.label || '');
-                input.setAttribute('title', tooltipText || meta.label || '');
-                if (!input.dataset.navEnhanced) {
-                    input.addEventListener('change', () => {
-                        updateActive();
-                        doc.documentElement.classList.remove('nav-open');
-                    });
-                    input.dataset.navEnhanced = 'true';
-                }
-            });
-            updateActive();
-        }
-        const selects = Array.from(sidebar.querySelectorAll('select'));
-        selects.forEach((select) => {
-            if (!select.dataset.navEnhanced) {
-                select.addEventListener('change', () => {
-                    doc.documentElement.classList.remove('nav-open');
-                });
-                select.dataset.navEnhanced = 'true';
-            }
-        });
-        const root = doc.documentElement;
-        if (root && NAV_PRIMARY.activePage) {
-            if (root.getAttribute('data-active-page') !== NAV_PRIMARY.activePage) {
-                root.setAttribute('data-active-page', NAV_PRIMARY.activePage);
-            }
-            const container = doc.querySelector('main .block-container');
-            if (container) {
-                container.classList.remove('page-transition-fade');
-                void container.offsetWidth;
-                container.classList.add('page-transition-fade');
-            }
-        }
-    };
-    ensureToggle();
-    apply();
-})();
-</script>
-"""
-nav_script = nav_script_template.replace("{payload}", nav_script_payload)
-components.html(nav_script, height=0)
 
 if st.session_state.get("tour_active", True):
     for idx, step in enumerate(TOUR_STEPS):
@@ -9414,11 +9441,7 @@ render_tour_banner()
 render_step_guide(page_key)
 render_glossary_faq()
 
-active_category = (
-    st.session_state.get("nav_category")
-    or page_meta.get("category")
-    or ""
-)
+active_category = page_meta.get("category") or ""
 render_breadcrumbs(active_category, page_key)
 render_quick_nav_tabs(page_key)
 render_navigation_actions(page_key)
@@ -9435,10 +9458,13 @@ if st.session_state.get("sample_data_notice"):
     st.session_state.sample_data_notice = False
     st.session_state.sample_data_message = ""
 
-if (
-    st.session_state.data_year is None
-    or st.session_state.data_monthly is None
-):
+data_ready = (
+    st.session_state.data_year is not None
+    and st.session_state.data_monthly is not None
+    and bool(st.session_state.get("data_loaded"))
+)
+if not data_ready:
+    st.session_state.data_loaded = False
     st.info(
         "左メニューの「データ管理」からCSVまたはExcelファイルをアップロードしてください。\n"
         "Upload CSV or Excel files from the “Data Import” menu on the left.\n\n"
@@ -9456,6 +9482,8 @@ if (
         )
     render_getting_started_intro()
     render_sample_data_hub()
+else:
+    st.session_state.data_loaded = True
 
 # ---------------- Pages ----------------
 
@@ -13461,6 +13489,7 @@ elif page == "設定":
             )
             year_df = compute_slopes(year_df, last_n=s["last_n"])
             st.session_state.data_year = year_df
+            st.session_state.data_loaded = True
             st.success("再計算が完了しました。")
 
 # 10) 保存ビュー
