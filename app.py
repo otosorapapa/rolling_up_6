@@ -435,6 +435,24 @@ def _build_query_with_page(page_key: str) -> str:
     return "?" + urlencode(pairs)
 
 
+def _build_page_url(page_key: str, extra: Optional[Dict[str, str]] = None) -> str:
+    """Return a query string that points to ``page_key`` with optional extra params."""
+
+    params = _get_query_params()
+    params["page"] = [page_key]
+    if extra:
+        for key, value in extra.items():
+            if value is None:
+                params.pop(key, None)
+            else:
+                params[key] = [value]
+    pairs: List[Tuple[str, str]] = []
+    for key, values in params.items():
+        for value in values:
+            pairs.append((key, value))
+    return "?" + urlencode(pairs)
+
+
 def _inject_ui_pref_loader() -> None:
     """Load persisted UI preferences from ``localStorage`` into query params."""
 
@@ -1205,6 +1223,7 @@ from services import (
     slopes_snapshot,
     shape_flags,
     detect_linear_anomalies,
+    detect_ts_anomalies,
     normalize_month_key,
 )
 from sample_data import (
@@ -11674,7 +11693,11 @@ elif page == "ランキング":
         st.stop()
 
     metric_catalog: Dict[str, Dict[str, object]] = {
-        "year_sum": {"column": "year_sum", "label": "売上（12カ月累計）", "type": "currency"},
+        "year_sum": {
+            "column": "year_sum",
+            "label": "売上（12カ月累計）",
+            "type": "currency",
+        },
         "gross_profit": {
             "column": "gross_est",
             "label": "粗利（推計）",
@@ -11694,6 +11717,12 @@ elif page == "ランキング":
         },
         "contribution": {"column": "contribution", "label": "寄与度", "type": "percent"},
     }
+    if "inventory_turnover" in working.columns:
+        metric_catalog["inventory_turnover"] = {
+            "column": "inventory_turnover",
+            "label": "在庫回転率",
+            "type": "numeric",
+        }
     metric_info = metric_catalog.get(metric, metric_catalog["year_sum"])
     metric_column = metric_info["column"]
     available = working.dropna(subset=[metric_column])
@@ -11735,6 +11764,9 @@ elif page == "ランキング":
             negative_icon="📉",
         )
     )
+    sorted_df["detail_url"] = sorted_df["product_code"].apply(
+        lambda code: _build_page_url("SKU詳細", {"sku": code})
+    )
 
     metric_label = metric_info["label"]
     if metric_info["type"] == "currency":
@@ -11774,6 +11806,7 @@ elif page == "ランキング":
                 "delta_badge": "Δ方向",
                 "contribution_pct": "寄与度(%)",
                 "year_sum_display": f"年計({unit_value})",
+                "detail_url": "詳細リンク",
             }
         )
     )
@@ -11908,6 +11941,7 @@ elif page == "ランキング":
         "前年比アイコン",
         f"前月差({unit_value})",
         "寄与度(%)",
+        "詳細リンク",
     ]
     st.markdown("#### Topランキング")
     st.dataframe(
@@ -11923,6 +11957,9 @@ elif page == "ランキング":
             ),
             f"前月差({unit_value})": st.column_config.NumberColumn(
                 f"前月差({unit_value})", format="%+.0f"
+            ),
+            "詳細リンク": st.column_config.LinkColumn(
+                "詳細", display_text="開く", help="SKU詳細ページを開きます。"
             ),
         },
     )
@@ -11965,6 +12002,9 @@ elif page == "ランキング":
             ),
             f"年計({unit_value})": st.column_config.NumberColumn(
                 f"年計({unit_value})", format="%.0f"
+            ),
+            "詳細リンク": st.column_config.LinkColumn(
+                "詳細", display_text="開く", help="SKU詳細ページを開きます。"
             ),
         },
     )
@@ -12084,6 +12124,16 @@ elif page == "比較ビュー":
     section_header("マルチ商品比較", "条件を柔軟に切り替えてSKUを重ね合わせます。", icon="🔍")
     params = st.session_state.compare_params
     year_df = st.session_state.data_year
+    template_profile = get_template_config().get("financial_profile", {})
+    cogs_ratio = float(template_profile.get("cogs_ratio", 0.0) or 0.0)
+    opex_ratio = float(template_profile.get("opex_ratio", 0.0) or 0.0)
+    gross_ratio = max(0.0, 1.0 - cogs_ratio)
+    operating_ratio = max(0.0, gross_ratio - opex_ratio)
+    year_df = year_df.copy()
+    if "gross_est" not in year_df.columns and gross_ratio > 0:
+        year_df["gross_est"] = year_df["year_sum"] * gross_ratio
+    if "operating_est" not in year_df.columns and operating_ratio > 0:
+        year_df["operating_est"] = year_df["year_sum"] * operating_ratio
     end_m = sidebar_state.get("compare_end_month") or latest_month
 
     snapshot = latest_yearsum_snapshot(year_df, end_m)
@@ -12497,6 +12547,153 @@ elif page == "比較ビュー":
     st.caption(
         "凡例クリックで表示切替、ダブルクリックで単独表示。ドラッグでズーム/パン、右上メニューからPNG/CSV取得可。"
     )
+
+    st.markdown("#### 指標別ライン比較とクロス集計")
+    name_map = snapshot.set_index("product_code")["display_name"].to_dict()
+    metric_candidates = [
+        ("年計売上", "year_sum", "currency"),
+        ("YoY(%)", "yoy", "percent"),
+        ("粗利（推計）", "gross_est", "currency"),
+        ("在庫回転率", "inventory_turnover", "numeric"),
+    ]
+    metric_map: Dict[str, Tuple[str, str]] = {}
+    for label, column, kind in metric_candidates:
+        if column in year_df.columns:
+            series = year_df[column]
+            if isinstance(series, pd.Series) and series.dropna().empty:
+                continue
+            metric_map[label] = (column, kind)
+    if not metric_map:
+        st.info("可視化できる指標が見つかりませんでした。データを確認してください。")
+    else:
+        metric_options = list(metric_map.keys())
+        default_metrics = metric_options[: min(2, len(metric_options))]
+        selected_metrics = st.multiselect(
+            "指標を選択",
+            options=metric_options,
+            default=default_metrics,
+            help="複数選択すると順番に折れ線とクロス表を描画します。",
+        )
+        months_all = pd.to_datetime(year_df["month"].unique())
+        months_all = np.sort(months_all[~pd.isna(months_all)]) if len(months_all) else []
+        if selected_metrics and len(months_all):
+            month_min = months_all[0].to_pydatetime()
+            month_max = months_all[-1].to_pydatetime()
+            default_start = months_all[max(0, len(months_all) - 12)].to_pydatetime()
+            start_dt, end_dt = st.slider(
+                "表示期間",
+                min_value=month_min,
+                max_value=month_max,
+                value=(default_start, month_max),
+                format="YYYY-MM",
+                key="compare_metric_period_slider",
+            )
+            start_key = pd.Timestamp(start_dt).strftime("%Y-%m")
+            end_key = pd.Timestamp(end_dt).strftime("%Y-%m")
+            active_codes = (
+                main_codes
+                if main_codes
+                else snapshot.nlargest(10, "year_sum")["product_code"].tolist()
+            )
+            for label in selected_metrics:
+                column, kind = metric_map[label]
+                metric_long, metric_pivot = get_yearly_series(
+                    year_df,
+                    codes=active_codes if active_codes else None,
+                    start=start_key,
+                    end=end_key,
+                    metric=column,
+                )
+                metric_long = metric_long.copy()
+                metric_long["month_dt"] = pd.to_datetime(metric_long["month"])
+                metric_long["display_name"] = metric_long["product_name"].fillna(
+                    metric_long["product_code"]
+                )
+                metric_pivot = metric_pivot.copy()
+                metric_pivot.index = pd.to_datetime(metric_pivot.index)
+                metric_pivot = metric_pivot.loc[
+                    (metric_pivot.index >= pd.Timestamp(start_dt))
+                    & (metric_pivot.index <= pd.Timestamp(end_dt))
+                ]
+                if active_codes:
+                    metric_long = metric_long[
+                        metric_long["product_code"].isin(active_codes)
+                    ]
+                    metric_pivot = metric_pivot[active_codes]
+                if metric_long.empty or metric_pivot.empty:
+                    st.warning(f"{label} のデータが不足しています。")
+                    continue
+                if kind == "currency":
+                    scale_val = UNIT_MAP.get(unit, 1)
+                    metric_long["value_display"] = metric_long[column] / scale_val
+                    metric_pivot_display = metric_pivot / scale_val
+                    y_title = f"{label}（{unit}）"
+                    hover_format = f"%{{y:,.0f}} {unit}"
+                    fmt = "{:.0f}"
+                    cmap = "Blues"
+                elif kind == "percent":
+                    metric_long["value_display"] = metric_long[column] * 100
+                    metric_pivot_display = metric_pivot * 100
+                    y_title = f"{label}"
+                    hover_format = "%{y:+.1f}%"
+                    fmt = "{:+.1f}%"
+                    cmap = "RdBu_r"
+                else:
+                    metric_long["value_display"] = metric_long[column]
+                    metric_pivot_display = metric_pivot
+                    y_title = label
+                    hover_format = "%{y:.2f}"
+                    fmt = "{:.2f}"
+                    cmap = "Purples"
+                fig_metric = px.line(
+                    metric_long,
+                    x="month_dt",
+                    y="value_display",
+                    color="display_name",
+                    labels={"month_dt": "月", "value_display": label},
+                    hover_data={"display_name": True},
+                )
+                fig_metric.update_traces(
+                    hovertemplate="<b>%{legendgroup}</b><br>月：%{x|%Y-%m}<br>値："
+                    + hover_format
+                    + "<extra></extra>"
+                )
+                fig_metric.update_yaxes(title_text=y_title)
+                fig_metric = apply_elegant_theme(
+                    fig_metric, theme=st.session_state.get("ui_theme", "light")
+                )
+                render_plotly_with_spinner(
+                    fig_metric, config=PLOTLY_CONFIG, spinner_text=SPINNER_MESSAGE
+                )
+
+                renamed_cols = {
+                    code: name_map.get(code, code) for code in metric_pivot_display.columns
+                }
+                metric_pivot_display = metric_pivot_display.rename(columns=renamed_cols)
+                display_round = 0 if kind == "currency" else (1 if kind == "percent" else 2)
+                styled = (
+                    metric_pivot_display.round(display_round)
+                    .style.format(fmt)
+                    .background_gradient(cmap=cmap, axis=None)
+                )
+                st.dataframe(styled, use_container_width=True)
+                heatmap = px.imshow(
+                    metric_pivot_display.T,
+                    color_continuous_scale=cmap,
+                    aspect="auto",
+                    labels=dict(x="月", y="SKU", color=label),
+                )
+                if kind == "percent":
+                    heatmap.update_coloraxes(cmid=0)
+                heatmap = apply_elegant_theme(
+                    heatmap, theme=st.session_state.get("ui_theme", "light")
+                )
+                render_plotly_with_spinner(
+                    heatmap, config=PLOTLY_CONFIG, spinner_text=SPINNER_MESSAGE
+                )
+        elif selected_metrics:
+            st.info("選択した期間に有効な月次データがありません。")
+
     st.markdown(
         """
 傾き（円/月）：直近 n ヶ月の回帰直線の傾き。+は上昇、−は下降。
@@ -12636,6 +12833,9 @@ elif page == "SKU詳細":
         .drop_duplicates()
         .sort_values("product_code")
     )
+    query_params = _get_query_params()
+    initial_sku_param = query_params.get("sku", [])
+    initial_sku = initial_sku_param[-1] if initial_sku_param else None
     mode = st.radio("表示モード", ["単品", "複数比較"], horizontal=True)
     tb = toolbar_sku_detail(multi_mode=(mode == "複数比較"))
     df_year = st.session_state.data_year.copy()
@@ -12653,8 +12853,15 @@ elif page == "SKU詳細":
     modal_is_multi = False
 
     if mode == "単品":
+        options = prods["product_code"] + " | " + prods["product_name"]
+        default_index = 0
+        if initial_sku and initial_sku in prods["product_code"].values:
+            default_index = int(prods.index[prods["product_code"] == initial_sku][0])
         prod_label = st.selectbox(
-            "SKU選択", options=prods["product_code"] + " | " + prods["product_name"]
+            "SKU選択",
+            options=options,
+            index=min(default_index, len(options) - 1) if len(options) else 0,
+            key="sku_detail_single_select",
         )
         code = prod_label.split(" | ")[0]
         build_chart_card(
@@ -12729,7 +12936,17 @@ elif page == "SKU詳細":
             )
     else:
         opts = (prods["product_code"] + " | " + prods["product_name"]).tolist()
-        sel = st.multiselect("SKU選択（最大60件）", options=opts, max_selections=60)
+        default_selection = []
+        if initial_sku and initial_sku in prods["product_code"].values:
+            default_selection = [
+                opts[int(prods.index[prods["product_code"] == initial_sku][0])]
+            ]
+        sel = st.multiselect(
+            "SKU選択（最大60件）",
+            options=opts,
+            default=default_selection,
+            max_selections=60,
+        )
         codes = [s.split(" | ")[0] for s in sel]
         if codes or (tb.get("slope_conf") and tb["slope_conf"].get("quick") != "なし"):
             build_chart_card(
@@ -12789,34 +13006,74 @@ elif page == "異常検知":
     unit = st.session_state.settings.get("currency_unit", "円")
     scale = UNIT_MAP.get(unit, 1)
 
-    col_a, col_b = st.columns([1.1, 1.1])
-    with col_a:
-        window = st.slider("学習窓幅（月）", 6, 18, st.session_state.get("anomaly_window", 12), key="anomaly_window")
-    with col_b:
-        score_method = st.radio("スコア基準", ["zスコア", "MADスコア"], horizontal=True, key="anomaly_score_method")
-
-    if score_method == "zスコア":
-        thr_key = "anomaly_thr_z"
-        threshold = st.slider(
-            "異常判定しきい値",
-            2.0,
-            5.0,
-            value=float(st.session_state.get(thr_key, 3.0)),
-            step=0.1,
-            key=thr_key,
-        )
-        robust = False
+    method_choice = st.radio(
+        "検知ロジック",
+        ["ローカル回帰", "季節調整Zスコア", "ARIMA"],
+        horizontal=True,
+        key="anomaly_method",
+    )
+    if method_choice == "ローカル回帰":
+        col_a, col_b = st.columns([1.1, 1.1])
+        with col_a:
+            window = st.slider(
+                "学習窓幅（月）",
+                6,
+                18,
+                st.session_state.get("anomaly_window", 12),
+                key="anomaly_window",
+            )
+        with col_b:
+            score_method = st.radio(
+                "スコア基準",
+                ["zスコア", "MADスコア"],
+                horizontal=True,
+                key="anomaly_score_method",
+            )
+        if score_method == "zスコア":
+            thr_key = "anomaly_thr_z"
+            threshold = st.slider(
+                "異常判定しきい値",
+                2.0,
+                5.0,
+                value=float(st.session_state.get(thr_key, 3.0)),
+                step=0.1,
+                key=thr_key,
+            )
+            robust = False
+        else:
+            thr_key = "anomaly_thr_mad"
+            threshold = st.slider(
+                "異常判定しきい値",
+                2.5,
+                6.0,
+                value=float(st.session_state.get(thr_key, 3.5)),
+                step=0.1,
+                key=thr_key,
+            )
+            robust = True
+        seasonal_periods = 12
+        seasonal_threshold = threshold
     else:
-        thr_key = "anomaly_thr_mad"
-        threshold = st.slider(
-            "異常判定しきい値",
-            2.5,
-            6.0,
-            value=float(st.session_state.get(thr_key, 3.5)),
-            step=0.1,
-            key=thr_key,
-        )
-        robust = True
+        col_a, col_b = st.columns([1.1, 1.1])
+        with col_a:
+            seasonal_periods = st.slider(
+                "季節周期（月）",
+                3,
+                24,
+                st.session_state.get("anomaly_seasonal_period", 12),
+                key="anomaly_seasonal_period",
+            )
+        with col_b:
+            seasonal_threshold = st.slider(
+                "閾値 (|Z|≥)",
+                1.5,
+                5.0,
+                value=float(st.session_state.get("anomaly_seasonal_threshold", 3.0)),
+                step=0.1,
+                key="anomaly_seasonal_threshold",
+            )
+        threshold = seasonal_threshold
+        robust = False
 
     prod_opts = (
         year_df[["product_code", "product_name"]]
@@ -12840,12 +13097,27 @@ elif page == "異常検知":
         if selected_codes and code not in selected_codes:
             continue
         s = g.sort_values("month").set_index("month")["year_sum"]
-        res = detect_linear_anomalies(
-            s,
-            window=int(window),
-            threshold=float(threshold),
-            robust=robust,
-        )
+        if method_choice == "ローカル回帰":
+            res = detect_linear_anomalies(
+                s,
+                window=int(window),
+                threshold=float(threshold),
+                robust=robust,
+            )
+            method_label = "local"
+            reason_prefix = "回帰残差"
+            if not res.empty:
+                res["reason"] = res["score"].apply(
+                    lambda v, pref=reason_prefix: f"{pref}が閾値を超過 ({v:+.2f})"
+                )
+        else:
+            method_label = "stl" if method_choice == "季節調整Zスコア" else "arima"
+            res = detect_ts_anomalies(
+                s,
+                method=method_label,
+                threshold=float(seasonal_threshold),
+                seasonal_periods=int(seasonal_periods),
+            )
         if res.empty:
             continue
         res["product_code"] = code
@@ -12855,6 +13127,9 @@ elif page == "異常検知":
             on="month",
             how="left",
         )
+        if "reason" not in res.columns:
+            res["reason"] = ""
+        res["method"] = res.get("method", method_label)
         res["score_abs"] = res["score"].abs()
         records.append(res)
 
@@ -12896,6 +13171,8 @@ elif page == "異常検知":
                 "yoy",
                 "delta_disp",
                 "score",
+                "method",
+                "reason",
             ]
         ].rename(
             columns={
@@ -12906,8 +13183,19 @@ elif page == "異常検知":
                 "yoy": "YoY",
                 "delta_disp": f"Δ({unit})",
                 "score": "スコア",
+                "method": "検知手法",
+                "reason": "理由",
             }
         )
+        method_label_map = {
+            "local": "ローカル回帰",
+            "stl": "季節調整",
+            "arima": "ARIMA",
+        }
+        if "検知手法" in view_table.columns:
+            view_table["検知手法"] = view_table["検知手法"].map(method_label_map).fillna(
+                view_table["検知手法"]
+            )
         st.dataframe(view_table, use_container_width=True)
         st.caption("値は指定した単位換算、スコアはローカル回帰残差の標準化値です。")
         st.download_button(

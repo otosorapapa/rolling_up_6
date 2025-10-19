@@ -6,6 +6,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from statsmodels.tsa.seasonal import STL
+from statsmodels.tsa.arima.model import ARIMA
 
 # ---------- Data classes ----------
 @dataclass
@@ -455,8 +457,18 @@ def latest_yearsum_snapshot(df_year: pd.DataFrame, end_month: str) -> pd.DataFra
     snap = snap.sort_values("year_sum", ascending=False)
     snap["rank"] = np.arange(1, len(snap) + 1)
     cols = ["product_code", "product_name", "year_sum", "rank", "yoy", "delta"]
-    if "slope_beta" in snap.columns:
-        cols.append("slope_beta")
+    optional_cols = [
+        "slope_beta",
+        "gross_profit",
+        "operating_profit",
+        "inventory_turnover",
+        "stock_turnover",
+    ]
+    for col in optional_cols:
+        if col in snap.columns and col not in cols:
+            cols.append(col)
+    remaining = [c for c in snap.columns if c not in cols]
+    cols.extend(remaining)
     return snap[cols]
 
 
@@ -744,4 +756,71 @@ def detect_linear_anomalies(y: pd.Series, window:int=12, threshold:float=2.5, ro
         if np.abs(score) >= threshold:
             out.append({"month": months[i], "value": float(s.iloc[i]), "score": float(score)})
     return pd.DataFrame(out)
+
+
+def detect_ts_anomalies(
+    y: pd.Series,
+    method: str = "stl",
+    threshold: float = 3.0,
+    seasonal_periods: int = 12,
+) -> pd.DataFrame:
+    """Detect anomalies using seasonal decomposition or ARIMA residuals.
+
+    Parameters
+    ----------
+    y : pd.Series
+        時系列データ。インデックスは月などの順序付きキー。
+    method : str
+        'stl'（季節調整残差）または 'arima'（ARIMA(1,1,1) 残差）。
+    threshold : float
+        Zスコアがこの閾値以上のものを異常として返す。
+    seasonal_periods : int
+        STL分解時の周期。月次データなら12が目安。
+    """
+
+    s = pd.Series(y).dropna()
+    cols = ["month", "value", "score", "method", "reason"]
+    if s.empty:
+        return pd.DataFrame(columns=cols)
+    values = s.astype(float).to_numpy()
+    if method == "stl":
+        if len(values) < max(3, seasonal_periods + 1):
+            return pd.DataFrame(columns=cols)
+        stl = STL(values, period=max(2, seasonal_periods), robust=True)
+        result = stl.fit()
+        resid = pd.Series(result.resid, index=s.index)
+    elif method == "arima":
+        if len(values) < 6:
+            return pd.DataFrame(columns=cols)
+        try:
+            model = ARIMA(values, order=(1, 1, 1))
+            fit = model.fit()
+            preds = fit.predict(start=1, end=len(values) - 1)
+        except Exception:
+            return pd.DataFrame(columns=cols)
+        resid_vals = values[1:] - preds
+        resid = pd.Series(resid_vals, index=s.index[1:])
+    else:
+        raise ValueError(f"Unsupported method: {method}")
+
+    sigma = resid.std(ddof=1)
+    if sigma == 0 or np.isnan(sigma):
+        sigma = 1.0
+    scores = resid / sigma
+    mask = scores.abs() >= threshold
+    if not mask.any():
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame(
+        {
+            "month": resid.index[mask],
+            "value": s.reindex(resid.index[mask]).astype(float).values,
+            "score": scores[mask].values,
+            "method": method,
+        }
+    )
+    reason_prefix = "季節調整" if method == "stl" else "ARIMA予測との差"
+    out["reason"] = out["score"].apply(
+        lambda v, prefix=reason_prefix: f"{prefix}が閾値を超過 ({v:+.2f})"
+    )
+    return out.reset_index(drop=True)
 
