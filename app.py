@@ -4,17 +4,12 @@ import json
 import math
 import re
 import textwrap
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, replace
 from string import Template
 from urllib.parse import urlencode
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Iterable, Callable, Any, Sequence
-from uuid import uuid4
+from typing import Optional, List, Dict, Tuple, Iterable, Callable, Any
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -190,138 +185,6 @@ CATEGORY_LOOKUP: Dict[str, str] = {
 
 RANKING_ALL_LABEL = "すべて"
 RANKING_ALL_CODE = "__all__"
-
-
-@dataclass
-class DatasetJob:
-    """Track the status of an asynchronous dataset ingestion job."""
-
-    id: str
-    status: str = "queued"
-    progress: float = 0.0
-    message: str = ""
-    result: Optional[Tuple[pd.DataFrame, pd.DataFrame]] = None
-    error: Optional[str] = None
-    started_at: float = field(default_factory=time.time)
-    finished_at: Optional[float] = None
-
-
-_DATASET_JOBS: Dict[str, DatasetJob] = {}
-_DATASET_LOCK = threading.Lock()
-
-
-@st.cache_resource
-def _get_async_executor() -> ThreadPoolExecutor:
-    """Return a shared thread pool for background data processing."""
-
-    return ThreadPoolExecutor(max_workers=2)
-
-
-def _processing_messages(language: Optional[str] = None) -> Dict[str, str]:
-    """Return translated progress messages for dataset ingestion."""
-
-    keys = ("start", "fill", "rolling", "slopes", "finalizing", "completed")
-    return {
-        key: t(f"processing.{key}", language=language, default="") for key in keys
-    }
-
-
-def _make_progress_updater(job_id: str) -> Callable[[float, str], None]:
-    """Create a thread-safe progress updater closure for a job."""
-
-    def _update(fraction: float, message: str) -> None:
-        clamped = max(0.0, min(1.0, float(fraction)))
-        with _DATASET_LOCK:
-            job = _DATASET_JOBS.get(job_id)
-            if not job:
-                return
-            job.progress = clamped
-            if message:
-                job.message = message
-            if job.status not in {"completed", "failed"}:
-                job.status = "running"
-
-    return _update
-
-
-def get_dataset_job(job_id: Optional[str]) -> Optional[DatasetJob]:
-    """Return a copy of the current job state."""
-
-    if not job_id:
-        return None
-    with _DATASET_LOCK:
-        job = _DATASET_JOBS.get(job_id)
-        return replace(job) if job else None
-
-
-def clear_dataset_job(job_id: Optional[str]) -> None:
-    """Remove a completed or cancelled job from the registry."""
-
-    if not job_id:
-        return
-    with _DATASET_LOCK:
-        _DATASET_JOBS.pop(job_id, None)
-
-
-def start_import_job(
-    df_raw: pd.DataFrame,
-    *,
-    product_name_col: str,
-    product_code_col: Optional[str],
-    language: Optional[str] = None,
-) -> str:
-    """Kick off background ingestion of a wide-form dataset."""
-
-    settings_snapshot = dict(st.session_state.get("settings", {}))
-    messages = _processing_messages(language=language)
-    job_id = uuid4().hex
-    job = DatasetJob(id=job_id, status="queued", message=messages.get("start", ""))
-    with _DATASET_LOCK:
-        _DATASET_JOBS[job_id] = job
-
-    executor = _get_async_executor()
-    df_copy = df_raw.copy(deep=True)
-
-    def _task() -> None:
-        reporter = _make_progress_updater(job_id)
-        try:
-            reporter(0.02, messages.get("start", ""))
-            long_df = parse_uploaded_table(
-                df_copy,
-                product_name_col=product_name_col,
-                product_code_col=product_code_col,
-            )
-            reporter(0.10, messages.get("fill", ""))
-
-            def _scaled_progress(fraction: float, message: str) -> None:
-                reporter(0.10 + 0.75 * max(0.0, min(1.0, fraction)), message)
-
-            normalized, year_df = compute_data_tables(
-                long_df,
-                settings=settings_snapshot,
-                progress=_scaled_progress,
-                messages=messages,
-            )
-            reporter(0.92, messages.get("finalizing", ""))
-            with _DATASET_LOCK:
-                job = _DATASET_JOBS.get(job_id)
-                if job:
-                    job.result = (normalized, year_df)
-                    job.status = "completed"
-                    job.progress = 1.0
-                    job.message = messages.get("completed", "Completed")
-                    job.finished_at = time.time()
-        except Exception as exc:  # pragma: no cover - defensive guard
-            with _DATASET_LOCK:
-                job = _DATASET_JOBS.get(job_id)
-                if job:
-                    job.status = "failed"
-                    job.error = str(exc)
-                    job.message = str(exc)
-                    job.finished_at = time.time()
-
-    executor.submit(_task)
-    return job_id
 
 
 def _clean_text_label(value: Optional[object]) -> str:
@@ -646,82 +509,6 @@ def _persist_ui_preferences(theme: str, elegant: bool, language: Optional[str]) 
     </script>
     """
     components.html(script, height=0)
-
-
-def _inject_responsive_base() -> None:
-    """Load responsive utility styles and accessible defaults."""
-
-    bootstrap = """
-    <link rel="stylesheet"
-          href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-          integrity="sha384-rbsA2VBKQ0C13d3d3mJ5b4t5iZ8SU1zYj4l4Z6V6B3p6x0Ax7Fu4Z9YjRHe6A+/"
-          crossorigin="anonymous">
-    """
-    custom_css = f"""
-    <style>
-      :root {{
-        --app-font-size-base: {BODY_FONT_SIZE}px;
-        --app-line-height: {BODY_LINE_HEIGHT_TARGET};
-        --app-heading-line-height: {HEADING_LINE_HEIGHT_TARGET};
-        --app-focus-color: {ACCENT_COLOR};
-        --app-surface: {SURFACE_COLOR};
-        --app-text: {TEXT_COLOR};
-      }}
-      html {{
-        font-size: 16px;
-      }}
-      body, .stApp {{
-        font-family: {FONT_BODY};
-        font-size: var(--app-font-size-base);
-        line-height: var(--app-line-height);
-        color: var(--app-text);
-        background-color: {BACKGROUND_COLOR};
-      }}
-      h1, h2, h3, h4, h5, h6 {{
-        font-family: {FONT_HEADING};
-        line-height: var(--app-heading-line-height);
-      }}
-      .stButton>button, .stDownloadButton>button {{
-        font-size: 1rem;
-        line-height: 1.3;
-        padding: 0.65rem 1.25rem;
-      }}
-      .stProgress > div > div {{
-        background: linear-gradient(90deg, {PRIMARY_COLOR}, {ACCENT_COLOR});
-      }}
-      a:focus-visible, button:focus-visible, .stButton>button:focus-visible {{
-        outline: 3px solid var(--app-focus-color);
-        outline-offset: 2px;
-      }}
-      .nav-tree__link:focus-visible {{
-        box-shadow: 0 0 0 3px rgba({ACCENT_RGB},0.35);
-      }}
-      @media (max-width: 768px) {{
-        .dashboard-kgi-grid {{
-          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        }}
-        .dashboard-kpi-grid {{
-          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        }}
-        .mck-hero__grid {{
-          grid-template-columns: 1fr;
-          gap: 1.5rem;
-        }}
-        .nav-tree {{
-          padding-bottom: 1.25rem;
-        }}
-      }}
-      @media (prefers-reduced-motion: reduce) {{
-        *, *::before, *::after {{
-          animation-duration: 0.01ms !important;
-          animation-iteration-count: 1 !important;
-          transition-duration: 0.01ms !important;
-          scroll-behavior: auto !important;
-        }}
-      }}
-    </style>
-    """
-    st.markdown(bootstrap + custom_css, unsafe_allow_html=True)
 
 
 EXPENSE_FILE_CANDIDATES: Tuple[Path, ...] = (
@@ -1385,7 +1172,6 @@ st.set_page_config(
 )
 
 _inject_ui_pref_loader()
-_inject_responsive_base()
 
 
 @st.cache_data(ttl=600)
@@ -3659,10 +3445,6 @@ if "import_upload_preview" not in st.session_state:
     st.session_state.import_upload_preview = None
 if "import_upload_diagnostics" not in st.session_state:
     st.session_state.import_upload_diagnostics = None
-if "import_processing_job" not in st.session_state:
-    st.session_state.import_processing_job = None
-if "import_pending_filename" not in st.session_state:
-    st.session_state.import_pending_filename = None
 
 # track user interactions and global filters
 if "click_log" not in st.session_state:
@@ -4915,64 +4697,21 @@ def download_pdf_overview(kpi: dict, top_df: pd.DataFrame, filename: str) -> byt
     return buffer.getvalue()
 
 
-def compute_data_tables(
-    long_df: pd.DataFrame,
-    *,
-    settings: Dict[str, Any],
-    progress: Optional[Callable[[float, str], None]] = None,
-    messages: Optional[Dict[str, str]] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Return normalized monthly and yearly aggregates for the dashboard."""
+def process_long_dataframe(long_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Normalize long-form sales data and update session state tables."""
 
-    msgs = messages or {}
+    settings = st.session_state.settings
     policy = settings.get("missing_policy", "zero_fill")
     window = int(settings.get("window", 12) or 12)
     last_n = int(settings.get("last_n", 12) or 12)
 
-    if progress:
-        progress(0.05, msgs.get("fill", "Preparing monthly coverage…"))
     normalized = fill_missing_months(long_df.copy(), policy=policy)
-
-    if progress:
-        progress(0.45, msgs.get("rolling", "Calculating yearly KPIs…"))
     year_df = compute_year_rolling(normalized, window=window, policy=policy)
-
-    if progress:
-        progress(0.75, msgs.get("slopes", "Updating trend metrics…"))
     year_df = compute_slopes(year_df, last_n=last_n)
 
-    if progress:
-        progress(0.9, msgs.get("finalizing", "Finalising dataset…"))
-
-    return normalized, year_df
-
-
-def process_long_dataframe(
-    long_df: pd.DataFrame,
-    *,
-    progress: Optional[Callable[[float, str], None]] = None,
-    auto_update: bool = True,
-    messages: Optional[Dict[str, str]] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Normalize sales data and optionally persist results in session state."""
-
-    msgs = messages or _processing_messages()
-    settings = dict(st.session_state.get("settings", {}))
-    normalized, year_df = compute_data_tables(
-        long_df,
-        settings=settings,
-        progress=progress,
-        messages=msgs,
-    )
-
-    if auto_update:
-        st.session_state.data_monthly = normalized
-        st.session_state.data_year = year_df
-        st.session_state.data_loaded = True
-
-    if progress:
-        progress(1.0, msgs.get("completed", "Completed"))
-
+    st.session_state.data_monthly = normalized
+    st.session_state.data_year = year_df
+    st.session_state.data_loaded = True
     return normalized, year_df
 
 
@@ -4981,9 +4720,6 @@ def ingest_wide_dataframe(
     *,
     product_name_col: str,
     product_code_col: Optional[str] = None,
-    progress: Optional[Callable[[float, str], None]] = None,
-    auto_update: bool = True,
-    messages: Optional[Dict[str, str]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Convert a wide table to normalized long/year tables and persist them."""
 
@@ -4992,12 +4728,7 @@ def ingest_wide_dataframe(
         product_name_col=product_name_col,
         product_code_col=product_code_col,
     )
-    return process_long_dataframe(
-        long_df,
-        progress=progress,
-        auto_update=auto_update,
-        messages=messages,
-    )
+    return process_long_dataframe(long_df)
 
 
 def format_amount(val: Optional[float], unit: str) -> str:
@@ -10085,7 +9816,6 @@ No auto-calculated metrics are linked to this template."""
                 type="primary",
                 help="年計・YoY・Δを自動計算し、ダッシュボード各ページで利用できる形式に整えます。/ Convert the file into yearly KPIs for the dashboard.",
                 use_container_width=True,
-                disabled=bool(st.session_state.get("import_processing_job")),
             )
             st.markdown(
                 "<p class='mobile-action-caption'>テンプレートの推奨科目を使うと入力から取り込みまでを15分以内で完了できます。<br>"
@@ -10094,80 +9824,40 @@ No auto-calculated metrics are linked to this template."""
             )
             st.markdown("</div>", unsafe_allow_html=True)
 
-            status_container = st.container()
             if convert_clicked:
                 if diagnostics.get("has_fatal"):
                     st.error(
                         "データに致命的なエラーがあるため取込を実行できません。列名と数値形式を確認してください。"
                     )
                 else:
-                    language = get_current_language()
-                    job_id = start_import_job(
-                        df_raw,
-                        product_name_col=product_name_col,
-                        product_code_col=code_col,
-                        language=language,
-                    )
-                    st.session_state.import_processing_job = job_id
-                    st.session_state.import_pending_filename = file.name if file else None
-                    st.session_state.data_loaded = False
-                    st.session_state.import_report_completed = False
-                    status_container.info(
-                        "バックグラウンドでデータ処理を開始しました。処理中も他のタブを操作できます。\n"
-                        "Processing started in the background. You can keep working in other tabs while it completes."
-                    )
+                    try:
+                        with loading_message("年計データを計算中…"):
+                            long_df, year_df = ingest_wide_dataframe(
+                                df_raw,
+                                product_name_col=product_name_col,
+                                product_code_col=code_col,
+                            )
 
-            job_id = st.session_state.get("import_processing_job")
-            if job_id:
-                job_state = get_dataset_job(job_id)
-                messages = _processing_messages()
-                with status_container:
-                    if job_state is None:
-                        st.warning("取込ジョブの状態を確認できません。再度実行してください。")
-                        st.session_state.import_processing_job = None
-                    elif job_state.status in {"queued", "running"}:
-                        progress_value = job_state.progress if job_state.progress else 0.0
-                        st.progress(progress_value, text=job_state.message or messages.get("start", ""))
-                        elapsed = time.time() - job_state.started_at
-                        st.caption(
-                            f"経過時間: {elapsed:0.1f} 秒 — 完了までお待ちの間も他のセクションを操作できます。"
+                        st.success(
+                            """取込完了。ダッシュボードへ移動して可視化を確認してください。
+Import completed. Open the dashboard pages to review the visuals."""
                         )
-                    elif job_state.status == "completed" and job_state.result:
-                        normalized, year_df = job_state.result
-                        st.session_state.data_monthly = normalized
-                        st.session_state.data_year = year_df
-                        st.session_state.data_loaded = True
-                        missing_series = normalized.get("is_missing")
-                        sku_series = normalized.get("product_code")
-                        month_series = normalized.get("month")
-                        summary = {
-                            "missing": int(missing_series.sum()) if missing_series is not None else 0,
-                            "total": int(len(normalized)),
-                            "sku_count": int(sku_series.nunique()) if sku_series is not None else 0,
-                            "period_start": str(month_series.min()) if month_series is not None else "",
-                            "period_end": str(month_series.max()) if month_series is not None else "",
+                        quality_summary = {
+                            "missing": int(long_df["is_missing"].sum()),
+                            "total": int(len(long_df)),
+                            "sku_count": int(long_df["product_code"].nunique()),
+                            "period_start": str(long_df["month"].min()),
+                            "period_end": str(long_df["month"].max()),
                         }
-                        st.session_state.import_quality_summary = summary
-                        pending_name = st.session_state.get("import_pending_filename")
-                        if pending_name:
-                            st.session_state.import_uploaded_file_name = pending_name
+                        st.session_state.import_quality_summary = quality_summary
+                        st.session_state.import_uploaded_file_name = file.name
                         st.session_state.import_last_uploaded = datetime.now().isoformat()
                         st.session_state.import_report_completed = False
                         st.session_state.import_wizard_step = max(
                             st.session_state.get("import_wizard_step", 1), 4
                         )
-                        st.success(messages.get("completed", "取込が完了しました。"))
-                        st.session_state.import_processing_job = None
-                        st.session_state.import_pending_filename = None
-                        clear_dataset_job(job_id)
-                    elif job_state.status == "failed":
-                        st.error(
-                            job_state.error
-                            or "データ取込中にエラーが発生しました。データ形式をご確認ください。"
-                        )
-                        st.session_state.import_processing_job = None
-                        st.session_state.import_pending_filename = None
-                        clear_dataset_job(job_id)
+                    except Exception as e:
+                        st.exception(e)
 
             st.session_state.import_layout_expanded = False
         else:
