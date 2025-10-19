@@ -613,10 +613,6 @@ def _inject_ui_pref_loader() -> None:
                 params.set('lang', stored.language);
                 changed = true;
             }}
-            if (stored.onboardingCompleted && !params.has('onboarding')) {{
-                params.set('onboarding', '1');
-                changed = true;
-            }}
         }} catch (err) {{
             console.warn('Failed to read stored UI prefs', err);
         }}
@@ -632,30 +628,17 @@ def _inject_ui_pref_loader() -> None:
     components.html(script, height=0)
 
 
-def _persist_ui_preferences(
-    theme: str,
-    elegant: bool,
-    language: Optional[str],
-    onboarding_completed: Optional[bool] = None,
-) -> None:
+def _persist_ui_preferences(theme: str, elegant: bool, language: Optional[str]) -> None:
     """Persist UI preferences to ``localStorage`` for subsequent visits."""
 
-    payload: Dict[str, object] = {
-        "theme": theme,
-        "elegant": elegant,
-        "language": language or "",
-    }
-    if onboarding_completed is not None:
-        payload["onboardingCompleted"] = onboarding_completed
+    payload = {"theme": theme, "elegant": elegant, "language": language or ""}
     script = f"""
     <script>
     (function() {{
         try {{
             const storageKey = {json.dumps(UI_PREF_STORAGE_KEY)};
             const payload = {json.dumps(payload, ensure_ascii=False)};
-            const stored = JSON.parse(window.localStorage.getItem(storageKey) || '{{}}');
-            const nextValue = Object.assign({{}}, stored, payload);
-            window.localStorage.setItem(storageKey, JSON.stringify(nextValue));
+            window.localStorage.setItem(storageKey, JSON.stringify(payload));
         }} catch (err) {{
             console.warn('Failed to persist UI prefs', err);
         }}
@@ -3662,6 +3645,10 @@ if "tour_step_index" not in st.session_state:
     st.session_state.tour_step_index = 0
 if "tour_completed" not in st.session_state:
     st.session_state.tour_completed = False
+if "onboarding_seen" not in st.session_state:
+    st.session_state.onboarding_seen = False
+if "show_onboarding_modal" not in st.session_state:
+    st.session_state.show_onboarding_modal = True
 if "sample_data_notice" not in st.session_state:
     st.session_state.sample_data_notice = False
 if "sample_data_message" not in st.session_state:
@@ -4486,6 +4473,58 @@ def render_app_hero():
     )
 
     st.markdown(hero_html, unsafe_allow_html=True)
+
+
+def render_onboarding_modal() -> None:
+    if st.session_state.get("onboarding_seen"):
+        return
+    if not st.session_state.get("show_onboarding_modal", True):
+        return
+    with compat_modal("クイックスタートガイド", key="onboarding_modal"):
+        header_cols = st.columns([4, 1])
+        with header_cols[1]:
+            if st.button("✕ 閉じる", key="onboarding_close", help="ガイドを閉じます。"):
+                st.session_state.onboarding_seen = True
+                st.session_state.show_onboarding_modal = False
+                st.rerun()
+
+        st.markdown("数分で操作感を掴めるよう、まずは次の2ステップだけを試してみましょう。")
+        st.markdown(
+            "1. **データ管理ページでアップロード** — サンプルデータまたは自社データを取り込んで分析を有効化\n"
+            "2. **ランキングや比較ビューを開く** — サイドバーのリンク（または URL の `?page=ranking` など）から直接アクセスして動きを確認"
+        )
+        st.caption(
+            "ヒント: サイドバーの各リンクにマウスオーバーすると、機能の説明ツールチップが表示されます。"
+        )
+
+        import_href = _build_query_with_page("import")
+        help_href = _build_query_with_page("help")
+        action_cols = st.columns([1, 1, 1])
+        if action_cols[0].button(
+            "操作ツアーを開始",
+            key="onboarding_start",
+            help="基礎編から順に案内する操作ツアーを開始します。",
+        ):
+            st.session_state.onboarding_seen = True
+            st.session_state.show_onboarding_modal = False
+            st.session_state.tour_active = True
+            st.session_state.tour_completed = False
+            st.session_state.tour_step_index = 0
+            if TOUR_STEPS:
+                st.session_state.tour_pending_nav = TOUR_STEPS[0]["nav_key"]
+            st.rerun()
+        action_cols[1].link_button(
+            "データ管理を開く",
+            import_href,
+            help="データ取込ページを別タブで表示します。",
+            use_container_width=True,
+        )
+        action_cols[2].link_button(
+            "詳細ガイドへ",
+            help_href,
+            help="より詳しいチュートリアルとFAQを表示します。",
+            use_container_width=True,
+        )
 
 
 def get_current_tour_step() -> Optional[Dict[str, str]]:
@@ -7354,313 +7393,96 @@ st.markdown(
     [data-testid="stSidebar"] .nav-tree{
       display:flex;
       flex-direction:column;
-      gap:0.6rem;
-      margin:0 0 0.9rem;
+      gap:1rem;
+      margin:0 0 1.2rem;
     }
-    [data-testid="stSidebar"] .nav-accordion__section{
-      border-radius:14px;
-      border:1px solid rgba(255,255,255,0.18);
-      background:rgba(255,255,255,0.05);
-      overflow:hidden;
-      transition:border-color .2s ease, box-shadow .2s ease;
+    [data-testid="stSidebar"] .nav-tree__section{
+      padding:0.75rem 0.85rem 0.9rem;
+      border-radius:16px;
+      border:1px solid rgba(255,255,255,0.16);
+      background:rgba(255,255,255,0.06);
+      box-shadow:0 14px 26px rgba(7,32,54,0.28);
     }
-    [data-testid="stSidebar"] .nav-accordion__section[open]{
-      border-color:rgba(255,255,255,0.32);
-      box-shadow:0 20px 36px rgba(7,32,54,0.32);
-    }
-    [data-testid="stSidebar"] .nav-accordion__summary{
-      display:flex;
-      align-items:center;
-      gap:0.6rem;
-      padding:0.65rem 0.85rem;
-      cursor:pointer;
-      list-style:none;
-      color:#ffffff;
+    [data-testid="stSidebar"] .nav-tree__heading{
+      font-size:0.9rem;
       font-weight:700;
-      font-size:0.92rem;
-    }
-    [data-testid="stSidebar"] .nav-accordion__summary::-webkit-details-marker{
-      display:none;
-    }
-    [data-testid="stSidebar"] .nav-accordion__summary-icon{
-      width:2rem;
-      height:2rem;
-      border-radius:50%;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      background:rgba(255,255,255,0.14);
-      font-size:1rem;
-      flex-shrink:0;
-    }
-    [data-testid="stSidebar"] .nav-accordion__summary-chevron{
-      margin-left:auto;
-      transition:transform .2s ease;
-    }
-    [data-testid="stSidebar"] .nav-accordion__section[open] .nav-accordion__summary-chevron{
-      transform:rotate(180deg);
-    }
-    [data-testid="stSidebar"] .nav-accordion__body{
-      padding:0 0.85rem 0.85rem;
-      border-top:1px solid rgba(255,255,255,0.12);
-    }
-    [data-testid="stSidebar"] .nav-accordion__section-desc{
-      margin:0.55rem 0 0.35rem;
-      font-size:0.78rem;
-      line-height:1.45;
-      color:rgba(255,255,255,0.72);
-    }
-    [data-testid="stSidebar"] .nav-accordion__group{
-      display:flex;
-      flex-direction:column;
-      gap:0.4rem;
-      padding:0.45rem 0 0.35rem;
-    }
-    [data-testid="stSidebar"] .nav-accordion__group-header{
-      display:flex;
-      align-items:baseline;
-      gap:0.45rem;
-    }
-    [data-testid="stSidebar"] .nav-accordion__group-label{
-      font-size:0.85rem;
-      font-weight:600;
+      margin:0 0 0.6rem;
+      letter-spacing:.04em;
       color:#ffffff;
+      position:relative;
+      padding-bottom:0.35rem;
+      border-bottom:2px solid rgba(255,255,255,0.12);
     }
-    [data-testid="stSidebar"] .nav-accordion__group-desc{
-      font-size:0.72rem;
-      color:rgba(255,255,255,0.68);
+    [data-testid="stSidebar"] .nav-tree__heading::after{
+      content:"";
+      position:absolute;
+      left:0;
+      bottom:-2px;
+      width:52px;
+      height:2px;
+      border-radius:999px;
+      background:var(--nav-section-accent, rgba(255,255,255,0.4));
     }
-    [data-testid="stSidebar"] .nav-accordion__list{
+    [data-testid="stSidebar"] .nav-tree__list{
       list-style:none;
       margin:0;
       padding:0;
       display:flex;
       flex-direction:column;
-      gap:0.3rem;
+      gap:0.35rem;
     }
-    [data-testid="stSidebar"] .nav-accordion__item{
-      display:flex;
-      align-items:center;
-      gap:0.4rem;
+    [data-testid="stSidebar"] .nav-tree__item{
+      margin:0;
     }
     [data-testid="stSidebar"] .nav-tree__link{
-      flex:1 1 auto;
       display:flex;
       align-items:center;
-      gap:0.55rem;
+      gap:0.75rem;
       text-decoration:none;
-      padding:0.55rem 0.65rem;
+      padding:0.65rem 0.75rem;
       border-radius:12px;
-      border:1px solid rgba(255,255,255,0.12);
+      border:1px solid rgba(255,255,255,0.14);
       background:rgba(255,255,255,0.03);
       color:rgba(255,255,255,0.85);
       transition:background .15s ease, border-color .15s ease, transform .15s ease;
     }
-    [data-testid="stSidebar"] .nav-tree__link:hover,
-    [data-testid="stSidebar"] .nav-tree__link:focus-visible{
+    [data-testid="stSidebar"] .nav-tree__link:hover{
       background:rgba(255,255,255,0.1);
       border-color:rgba(255,255,255,0.35);
       color:#ffffff;
       transform:translateX(2px);
     }
     [data-testid="stSidebar"] .nav-tree__item.is-active .nav-tree__link{
-      border-color:var(--nav-section-accent, rgba(255,255,255,0.55));
-      background:rgba(255,255,255,0.16);
-      box-shadow:0 16px 28px rgba(7,32,54,0.34);
+      border-color:var(--nav-section-accent, rgba(255,255,255,0.6));
+      background:rgba(255,255,255,0.18);
+      box-shadow:0 18px 32px rgba(7,32,54,0.36);
       color:#ffffff;
     }
     [data-testid="stSidebar"] .nav-tree__icon{
-      width:1.8rem;
-      height:1.8rem;
+      width:2rem;
+      height:2rem;
       border-radius:50%;
       display:flex;
       align-items:center;
       justify-content:center;
-      font-size:0.95rem;
+      font-size:1rem;
       background:rgba(255,255,255,0.12);
       color:#ffffff;
       flex-shrink:0;
     }
     [data-testid="stSidebar"] .nav-tree__item.is-active .nav-tree__icon{
-      background:var(--nav-section-accent, rgba(255,255,255,0.22));
-      box-shadow:0 10px 22px rgba(7,32,54,0.32);
+      background:var(--nav-section-accent, rgba(255,255,255,0.2));
+      box-shadow:0 10px 24px rgba(7,32,54,0.38);
     }
     [data-testid="stSidebar"] .nav-tree__text{
-      font-size:0.88rem;
+      font-size:0.95rem;
       font-weight:600;
-      line-height:1.25;
     }
-    [data-testid="stSidebar"] .nav-tree__help{
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      width:1.9rem;
-      height:1.9rem;
-      border-radius:50%;
-      text-decoration:none;
-      background:rgba(255,255,255,0.08);
-      border:1px solid rgba(255,255,255,0.18);
-      color:#ffffff;
-      flex-shrink:0;
-      transition:background .15s ease, border-color .15s ease, transform .15s ease;
-    }
-    [data-testid="stSidebar"] .nav-tree__help:hover,
-    [data-testid="stSidebar"] .nav-tree__help:focus-visible{
-      background:var(--nav-section-accent, rgba(255,255,255,0.22));
-      border-color:var(--nav-section-accent, rgba(255,255,255,0.55));
-      transform:translateY(-1px);
-    }
-    [data-testid="stSidebar"] .nav-tree__item.onboarding-highlight .nav-tree__link{
-      border-color:rgba(14,165,233,0.75);
-      box-shadow:0 0 0 2px rgba(14,165,233,0.32), 0 18px 30px rgba(7,32,54,0.32);
-    }
-    [data-testid="stSidebar"] .nav-tree__item.onboarding-highlight .nav-tree__icon{
-      background:rgba(14,165,233,0.28);
-      color:#0b1f33;
-    }
-    .onboarding-overlay-root{
-      position:fixed;
-      inset:0;
-      z-index:1000;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      pointer-events:auto;
-    }
-    div[data-testid="stVerticalBlock"]:has(> .onboarding-overlay-root){
-      position:static;
-      height:0;
-    }
-    .onboarding-overlay__scrim{
-      position:absolute;
-      inset:0;
-      background:rgba(8,18,35,0.62);
-      backdrop-filter:blur(4px);
-    }
-    .onboarding-overlay__panel{
-      position:relative;
-      z-index:1;
-      width:min(540px, 92vw);
-      max-height:90vh;
-      overflow:auto;
-      background:#ffffff;
-      border-radius:18px;
-      border:1px solid rgba(12,31,51,0.18);
-      box-shadow:0 24px 48px rgba(7,32,54,0.46);
-      padding:1.4rem 1.55rem 1.1rem;
-      color:#0b1f33;
-      display:flex;
-      flex-direction:column;
-      gap:0.9rem;
-    }
-    .onboarding-overlay__header{
-      display:flex;
-      flex-direction:column;
-      gap:0.45rem;
-    }
-    .onboarding-overlay__step{
-      font-size:0.78rem;
-      letter-spacing:0.12em;
-      text-transform:uppercase;
-      font-weight:700;
-      color:rgba(11,31,51,0.6);
-    }
-    .onboarding-overlay__header h2{
-      margin:0;
-      font-size:1.3rem;
-      line-height:1.35;
-      font-family:var(--font-heading, 'Noto Sans JP', sans-serif);
-      color:#0b1f33;
-    }
-    .onboarding-overlay__body{
-      display:flex;
-      flex-direction:column;
-      gap:0.75rem;
-    }
-    .onboarding-overlay__lead{
-      margin:0;
-      font-size:0.96rem;
-      line-height:1.6;
-      color:rgba(11,31,51,0.9);
-    }
-    .onboarding-overlay__list{
-      margin:0 0 0.4rem 1.15rem;
-      padding:0;
-      color:rgba(11,31,51,0.82);
-      font-size:0.88rem;
-      line-height:1.5;
-    }
-    .onboarding-overlay__list li{
-      margin-bottom:0.35rem;
-    }
-    .onboarding-overlay__cta{
-      margin:0.2rem 0 0.65rem;
-    }
-    .onboarding-overlay__cta [data-testid="column"]{
-      display:flex;
-      align-items:center;
-      justify-content:center;
-    }
-    .onboarding-overlay__cta [data-testid="stButton"] > button{
-      background:#0ea5e9;
-      color:#0b1f33;
-      border:none;
-      font-weight:700;
-      padding:0.62rem 0.8rem;
-      border-radius:999px;
-      box-shadow:0 14px 28px rgba(14,165,233,0.28);
-    }
-    .onboarding-overlay__cta [data-testid="stButton"] > button:hover{
-      background:#075985;
-      color:#ffffff;
-    }
-    .onboarding-overlay__actions{
-      margin-top:0.4rem;
-    }
-    .onboarding-overlay__actions [data-testid="column"]{
-      display:flex;
-      align-items:center;
-    }
-    .onboarding-overlay__actions [data-testid="stButton"]{
-      width:100%;
-    }
-    .onboarding-overlay__actions [data-testid="stButton"] > button{
-      width:100%;
-      border-radius:10px;
-      border:1px solid rgba(12,31,51,0.18);
-      background:rgba(14,165,233,0.12);
-      color:#0b1f33;
-      font-weight:600;
-      padding:0.55rem 0.75rem;
-    }
-    .onboarding-overlay__actions [data-testid="column"]:last-child [data-testid="stButton"] > button{
-      background:#0b1f3b;
-      border-color:#0b1f3b;
-      color:#ffffff;
-      box-shadow:0 12px 28px rgba(11,31,59,0.32);
-    }
-    .onboarding-overlay__actions [data-testid="column"]:last-child [data-testid="stButton"] > button:hover{
-      background:#08172c;
-      border-color:#08172c;
-    }
-    .onboarding-overlay__actions [data-testid="column"]:first-child [data-testid="stButton"] > button{
-      border-color:rgba(12,31,51,0.18);
-      background:rgba(11,31,51,0.05);
-    }
-    @media (max-width: 640px){
-      .onboarding-overlay__panel{
-        width:min(96vw, 520px);
-        padding:1.15rem 1.1rem;
-      }
-      .onboarding-overlay__header h2{
-        font-size:1.15rem;
-      }
-      .onboarding-overlay__actions [data-testid="column"]{
-        flex:1 1 100%;
-      }
-      .onboarding-overlay__actions [data-testid="column"] + [data-testid="column"]{
-        margin-left:0.4rem;
-      }
+    [data-testid="stSidebar"] .nav-tree__caption{
+      margin:0.6rem 0 0;
+      font-size:0.75rem;
+      line-height:1.4;
+      color:rgba(255,255,255,0.7);
     }
     .has-tooltip{
       position:relative;
@@ -8222,71 +8044,28 @@ st.markdown(
 )
 
 SIDEBAR_CATEGORY_STYLES = {
-    "setup": {
-        "label": "セットアップ",
+    "input": {
+        "label": "データ入力",
         "color": "#4f9ab8",
-        "description": "データ取込や前提条件の設定など最初に行う操作です。",
-        "icon": "🧭",
+        "description": "テンプレート選択からアップロード、設定までの初期操作を集約しています。",
     },
-    "insight": {
-        "label": "分析ビュー",
+    "report": {
+        "label": "分析レポート",
         "color": "#123a5f",
-        "description": "KPIハイライトから詳細分析まで、状況を把握するためのページです。",
-        "icon": "📊",
+        "description": "ダッシュボードやランキングなど、分析結果を確認するページです。",
     },
-    "monitor": {
-        "label": "モニタリング",
+    "simulation": {
+        "label": "シナリオシミュレーション",
         "color": "#f2994a",
-        "description": "異常やリスクの兆候を早期に捉える監視用機能です。",
-        "icon": "🔔",
+        "description": "異常検知やアラートで将来シナリオやリスクを検証します。",
     },
     "support": {
         "label": "サポート",
         "color": "#6c5ce7",
-        "description": "ヘルプやチュートリアルで操作方法を確認できます。",
-        "icon": "❓",
+        "description": "チュートリアルやヘルプドキュメントで操作方法を確認できます。",
     },
 }
-SIDEBAR_CATEGORY_ORDER = ["setup", "insight", "monitor", "support"]
-
-SIDEBAR_GROUP_DEFINITIONS: List[Dict[str, str]] = [
-    {
-        "key": "setup_data",
-        "category": "setup",
-        "label": "データ管理",
-        "description": "テンプレートとデータファイルの管理",
-    },
-    {
-        "key": "setup_preferences",
-        "category": "setup",
-        "label": "分析前提",
-        "description": "集計条件や保存ビューの管理",
-    },
-    {
-        "key": "insight_highlight",
-        "category": "insight",
-        "label": "ハイライト",
-        "description": "全体の状況を素早く把握",
-    },
-    {
-        "key": "insight_deepdive",
-        "category": "insight",
-        "label": "詳細分析",
-        "description": "商品別に深掘りして比較",
-    },
-    {
-        "key": "monitor_watch",
-        "category": "monitor",
-        "label": "監視・検知",
-        "description": "異常兆候とアラートを把握",
-    },
-    {
-        "key": "support_enablement",
-        "category": "support",
-        "label": "ガイド",
-        "description": "操作ガイドと学習コンテンツ",
-    },
-]
+SIDEBAR_CATEGORY_ORDER = ["input", "report", "simulation", "support"]
 
 SIDEBAR_PAGES = [
     {
@@ -8296,8 +8075,7 @@ SIDEBAR_PAGES = [
         "title": "ホーム",
         "tagline": "分析ダッシュボード",
         "tooltip": "主要KPIとトレンドを俯瞰できるダッシュボードです。",
-        "category": "insight",
-        "group": "insight_highlight",
+        "category": "report",
     },
     {
         "key": "executive",
@@ -8306,8 +8084,7 @@ SIDEBAR_PAGES = [
         "title": "経営ダッシュボード",
         "tagline": "経営層向けハイライト",
         "tooltip": "経営層が確認する主要KPIとトレンドをシンプルにまとめたビューです。",
-        "category": "insight",
-        "group": "insight_highlight",
+        "category": "report",
     },
     {
         "key": "ranking",
@@ -8316,8 +8093,7 @@ SIDEBAR_PAGES = [
         "title": "ランキング",
         "tagline": "指標別トップ・ボトム",
         "tooltip": "指定月の上位・下位SKUを指標別に比較して勢いを捉えます。",
-        "category": "insight",
-        "group": "insight_highlight",
+        "category": "report",
     },
     {
         "key": "compare",
@@ -8326,8 +8102,7 @@ SIDEBAR_PAGES = [
         "title": "比較ビュー",
         "tagline": "SKU横断の推移比較",
         "tooltip": "複数SKUの推移を重ね合わせ、変化の違いを見比べます。",
-        "category": "insight",
-        "group": "insight_deepdive",
+        "category": "report",
     },
     {
         "key": "detail",
@@ -8336,8 +8111,7 @@ SIDEBAR_PAGES = [
         "title": "SKU詳細",
         "tagline": "個別SKUの深掘り",
         "tooltip": "個別SKUの時系列やAIサマリーで背景を確認します。",
-        "category": "insight",
-        "group": "insight_deepdive",
+        "category": "report",
     },
     {
         "key": "correlation",
@@ -8346,8 +8120,7 @@ SIDEBAR_PAGES = [
         "title": "相関分析",
         "tagline": "指標のつながり分析",
         "tooltip": "散布図と相関係数で指標同士やSKU間の関係を把握します。",
-        "category": "insight",
-        "group": "insight_deepdive",
+        "category": "report",
     },
     {
         "key": "category",
@@ -8356,38 +8129,16 @@ SIDEBAR_PAGES = [
         "title": "併買カテゴリ",
         "tagline": "併買パターンの探索",
         "tooltip": "購買ネットワークのクラスタリングでクロスセル候補を探します。",
-        "category": "insight",
-        "group": "insight_deepdive",
+        "category": "report",
     },
     {
         "key": "import",
         "page": "データ取込",
         "icon": "📥",
-        "title": "データ取込",
+        "title": "データ管理",
         "tagline": "CSV/Excelアップロードとテンプレート管理",
         "tooltip": "CSV/Excelの取込、テンプレート選択、デモデータ読込みをこの画面に集約しました。",
-        "category": "setup",
-        "group": "setup_data",
-    },
-    {
-        "key": "settings",
-        "page": "設定",
-        "icon": "⚙️",
-        "title": "設定",
-        "tagline": "集計条件の設定",
-        "tooltip": "年計ウィンドウや通貨単位など、分析前提を調整します。",
-        "category": "setup",
-        "group": "setup_preferences",
-    },
-    {
-        "key": "saved",
-        "page": "保存ビュー",
-        "icon": "💾",
-        "title": "保存ビュー",
-        "tagline": "条件の保存と共有",
-        "tooltip": "現在の設定や比較条件を保存し、ワンクリックで再現します。",
-        "category": "setup",
-        "group": "setup_preferences",
+        "category": "input",
     },
     {
         "key": "anomaly",
@@ -8396,8 +8147,7 @@ SIDEBAR_PAGES = [
         "title": "異常検知",
         "tagline": "異常値とリスク検知",
         "tooltip": "回帰残差を基にした異常値スコアでリスク兆候を洗い出します。",
-        "category": "monitor",
-        "group": "monitor_watch",
+        "category": "simulation",
     },
     {
         "key": "alert",
@@ -8406,8 +8156,25 @@ SIDEBAR_PAGES = [
         "title": "アラート",
         "tagline": "しきい値ベースの監視",
         "tooltip": "設定した条件に該当するSKUをリスト化し、対応優先度を整理します。",
-        "category": "monitor",
-        "group": "monitor_watch",
+        "category": "simulation",
+    },
+    {
+        "key": "settings",
+        "page": "設定",
+        "icon": "⚙️",
+        "title": "設定",
+        "tagline": "集計条件の設定",
+        "tooltip": "年計ウィンドウや通貨単位など、分析前提を調整します。",
+        "category": "input",
+    },
+    {
+        "key": "saved",
+        "page": "保存ビュー",
+        "icon": "💾",
+        "title": "保存ビュー",
+        "tagline": "条件の保存と共有",
+        "tooltip": "現在の設定や比較条件を保存し、ワンクリックで再現します。",
+        "category": "input",
     },
     {
         "key": "help",
@@ -8417,37 +8184,8 @@ SIDEBAR_PAGES = [
         "tagline": "操作ガイドと導線ツアー",
         "tooltip": "初回利用者向けの操作手順やFAQ、ツアー動画へのリンクをまとめています。",
         "category": "support",
-        "group": "support_enablement",
     },
 ]
-
-SIDEBAR_GROUP_LOOKUP: Dict[str, Dict[str, str]] = {
-    group["key"]: group for group in SIDEBAR_GROUP_DEFINITIONS
-}
-SIDEBAR_GROUPS_BY_CATEGORY: Dict[str, List[Dict[str, str]]] = {
-    key: [] for key in SIDEBAR_CATEGORY_ORDER
-}
-for group in SIDEBAR_GROUP_DEFINITIONS:
-    SIDEBAR_GROUPS_BY_CATEGORY.setdefault(group["category"], []).append(group)
-
-SIDEBAR_GROUP_PAGE_KEYS: Dict[str, List[str]] = {
-    group_key: [] for group_key in SIDEBAR_GROUP_LOOKUP.keys()
-}
-PAGE_CATEGORY_LOOKUP: Dict[str, str] = {}
-PAGE_GROUP_LOOKUP: Dict[str, str] = {}
-for page in SIDEBAR_PAGES:
-    page_key = page["key"]
-    group_key = page.get("group", "") or ""
-    category_key = page.get("category", "")
-    if group_key and group_key in SIDEBAR_GROUP_LOOKUP:
-        SIDEBAR_GROUP_PAGE_KEYS.setdefault(group_key, []).append(page_key)
-        PAGE_GROUP_LOOKUP[page_key] = group_key
-        category_key = SIDEBAR_GROUP_LOOKUP[group_key].get("category", category_key)
-    elif group_key:
-        PAGE_GROUP_LOOKUP[page_key] = group_key
-    if category_key:
-        PAGE_CATEGORY_LOOKUP[page_key] = category_key
-
 
 SIDEBAR_PAGE_LOOKUP = {page["key"]: page for page in SIDEBAR_PAGES}
 NAV_KEYS = [page["key"] for page in SIDEBAR_PAGES]
@@ -8455,7 +8193,7 @@ NAV_TITLE_LOOKUP = {page["key"]: page["title"] for page in SIDEBAR_PAGES}
 page_lookup = {page["key"]: page["page"] for page in SIDEBAR_PAGES}
 
 def render_navigation_tree(active_page: str) -> None:
-    """Render the sidebar navigation tree with two-level accordion grouping."""
+    """Render the sidebar navigation tree with hierarchical grouping."""
 
     base_pairs: List[Tuple[str, str]] = []
     params = _get_query_params()
@@ -8465,189 +8203,67 @@ def render_navigation_tree(active_page: str) -> None:
         for value in values:
             base_pairs.append((key, value))
 
-    active_category = PAGE_CATEGORY_LOOKUP.get(active_page, "")
-
     sections: List[str] = []
     for category_key in SIDEBAR_CATEGORY_ORDER:
-        category_groups = SIDEBAR_GROUPS_BY_CATEGORY.get(category_key, [])
-        if not category_groups:
+        pages = [meta for meta in SIDEBAR_PAGES if meta.get("category") == category_key]
+        if not pages:
             continue
         category_meta = SIDEBAR_CATEGORY_STYLES.get(category_key, {})
         heading = html.escape(category_meta.get("label", category_key.title()))
-        summary_icon = html.escape(category_meta.get("icon", ""))
         description = html.escape(category_meta.get("description", ""))
         accent = html.escape(category_meta.get("color", PRIMARY_COLOR))
-
-        group_blocks: List[str] = []
-        for group_meta in category_groups:
-            group_key = group_meta["key"]
-            pages = [meta for meta in SIDEBAR_PAGES if meta.get("group") == group_key]
-            if not pages:
-                continue
-
-            group_label = html.escape(group_meta.get("label", ""))
-            group_desc = html.escape(group_meta.get("description", ""))
-            page_items: List[str] = []
-            for page_meta in pages:
-                page_key = page_meta["key"]
-                label = html.escape(page_meta.get("title", page_key))
-                icon = html.escape(page_meta.get("icon", ""))
-                tooltip = page_meta.get("tooltip") or page_meta.get("tagline") or ""
-                tooltip_attr = html.escape(tooltip)
-                link_pairs = list(base_pairs)
-                link_pairs.append(("page", page_key))
-                href = "?" + urlencode(link_pairs)
-                is_active = page_key == active_page
-                classes = ["nav-tree__item", "nav-accordion__item"]
-                if is_active:
-                    classes.append("is-active")
-                aria_current = "page" if is_active else "false"
-                help_href = html.escape(
-                    _build_page_url("help", {"topic": page_key}),
-                    quote=True,
-                )
-                help_text = html.escape(f"{label}のヘルプを開く", quote=True)
-                help_caption = html.escape("ヘルプページで用語を確認", quote=True)
-                page_items.append(
-                    """
-                    <li class="{classes}" data-nav-key="{nav_key}" data-group-key="{group_key}">
-                      <a class="nav-tree__link has-tooltip" href="{href}" title="{tooltip}" data-tooltip="{tooltip}" aria-current="{aria}" aria-label="{label}">
-                        <span class="nav-tree__icon" aria-hidden="true">{icon}</span>
-                        <span class="nav-tree__text">{label}</span>
-                      </a>
-                      <a class="nav-tree__help has-tooltip" href="{help_href}" data-tooltip="{help_caption}" title="{help_caption}" aria-label="{help_text}">
-                        <span aria-hidden="true">ℹ️</span>
-                      </a>
-                    </li>
-                    """.format(
-                        classes=" ".join(classes),
-                        nav_key=html.escape(page_key),
-                        group_key=html.escape(group_key),
-                        href=html.escape(href, quote=True),
-                        tooltip=tooltip_attr,
-                        aria=aria_current,
-                        icon=icon,
-                        label=label,
-                        help_href=help_href,
-                        help_caption=help_caption,
-                        help_text=help_text,
-                    )
-                )
-
-            group_blocks.append(
+        items: List[str] = []
+        for page_meta in pages:
+            page_key = page_meta["key"]
+            label = html.escape(page_meta.get("title", page_key))
+            icon = html.escape(page_meta.get("icon", ""))
+            tooltip = page_meta.get("tooltip") or page_meta.get("tagline") or ""
+            tooltip_attr = html.escape(tooltip)
+            link_pairs = list(base_pairs)
+            link_pairs.append(("page", page_key))
+            href = "?" + urlencode(link_pairs)
+            is_active = page_key == active_page
+            classes = ["nav-tree__item"]
+            if is_active:
+                classes.append("is-active")
+            aria_current = "page" if is_active else "false"
+            items.append(
                 """
-                <div class="nav-accordion__group" data-group-key="{group_key}">
-                  <div class="nav-accordion__group-header">
-                    <span class="nav-accordion__group-label">{label}</span>
-                    <span class="nav-accordion__group-desc">{description}</span>
-                  </div>
-                  <ul class="nav-tree__list nav-accordion__list">{items}</ul>
-                </div>
+                <li class="{classes}" data-nav-key="{nav_key}">
+                  <a class="nav-tree__link has-tooltip" href="{href}" title="{tooltip}" data-tooltip="{tooltip}" aria-current="{aria}" aria-label="{label}">
+                    <span class="nav-tree__icon" aria-hidden="true">{icon}</span>
+                    <span class="nav-tree__text">{label}</span>
+                  </a>
+                </li>
                 """.format(
-                    group_key=html.escape(group_key),
-                    label=group_label,
-                    description=group_desc,
-                    items="".join(page_items),
+                    classes=" ".join(classes),
+                    nav_key=html.escape(page_key),
+                    href=html.escape(href, quote=True),
+                    tooltip=tooltip_attr,
+                    aria=aria_current,
+                    icon=icon,
+                    label=label,
                 )
             )
-
-        if not group_blocks:
-            continue
-
-        is_open = category_key == active_category
         sections.append(
             """
-            <details class="nav-accordion__section" data-section-key="{category}"{open_attr}>
-              <summary class="nav-accordion__summary" aria-label="{heading}">
-                <span class="nav-accordion__summary-icon" aria-hidden="true">{icon}</span>
-                <span class="nav-accordion__summary-label">{heading}</span>
-                <span class="nav-accordion__summary-chevron" aria-hidden="true">▾</span>
-              </summary>
-              <div class="nav-accordion__body" style="--nav-section-accent:{accent};">
-                <p class="nav-accordion__section-desc">{description}</p>
-                {groups}
-              </div>
-            </details>
+            <section class="nav-tree__section" data-category-key="{category}" style="--nav-section-accent:{accent};">
+              <h4 class="nav-tree__heading">{heading}</h4>
+              <ul class="nav-tree__list">{items}</ul>
+              <p class="nav-tree__caption">{description}</p>
+            </section>
             """.format(
                 category=html.escape(category_key),
-                open_attr=" open" if is_open else "",
-                heading=heading,
-                icon=summary_icon,
                 accent=accent,
+                heading=heading,
+                items="".join(items),
                 description=description,
-                groups="".join(group_blocks),
             )
         )
 
     st.sidebar.markdown(
-        "<nav class='nav-tree nav-accordion'>" + "".join(sections) + "</nav>",
+        "<nav class='nav-tree'>" + "".join(sections) + "</nav>",
         unsafe_allow_html=True,
-    )
-
-    components.html(
-        """
-        <script>
-        (function() {
-            const doc = window.parent.document;
-            const setupAccordion = () => {
-                const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                if (!sidebar) return;
-                const sections = Array.from(sidebar.querySelectorAll('.nav-accordion__section'));
-                const storageKey = 'mck-nav-open';
-                const syncState = (section) => {
-                    if (!section) return;
-                    if (section.open) {
-                        try { window.localStorage.setItem(storageKey, section.dataset.sectionKey || ''); } catch (err) {}
-                    } else {
-                        try {
-                            const stored = window.localStorage.getItem(storageKey);
-                            if (stored && stored === (section.dataset.sectionKey || '')) {
-                                window.localStorage.removeItem(storageKey);
-                            }
-                        } catch (err) {}
-                    }
-                };
-                sections.forEach((section) => {
-                    section.addEventListener('toggle', () => {
-                        if (section.open) {
-                            sections.forEach((other) => {
-                                if (other !== section) {
-                                    other.open = false;
-                                }
-                            });
-                        }
-                        syncState(section);
-                    });
-                });
-                const active = sidebar.querySelector('.nav-tree__item.is-active');
-                if (active) {
-                    const activeSection = active.closest('.nav-accordion__section');
-                    if (activeSection) {
-                        activeSection.open = true;
-                        syncState(activeSection);
-                    }
-                }
-                try {
-                    const stored = window.localStorage.getItem(storageKey);
-                    if (stored) {
-                        const storedSection = sidebar.querySelector('.nav-accordion__section[data-section-key="' + stored + '"]');
-                        if (storedSection) {
-                            storedSection.open = true;
-                        }
-                    }
-                } catch (err) {
-                    console.warn('Failed to restore accordion state', err);
-                }
-            };
-            if (doc.readyState === 'loading') {
-                doc.addEventListener('DOMContentLoaded', setupAccordion, { once: true });
-            } else {
-                setupAccordion();
-            }
-        })();
-        </script>
-        """,
-        height=0,
     )
 
 
@@ -8736,61 +8352,11 @@ if used_category_keys:
         <div class="sidebar-legend">
             <p class="sidebar-legend__title">機能グループ</p>
             <ul class="sidebar-legend__list">{legend_items_html}</ul>
-            <p class="sidebar-legend__hint">カテゴリ名をクリックするとメニューを展開できます。ℹ️から関連ヘルプへ移動できます。</p>
+            <p class="sidebar-legend__hint">各メニューにカーソルを合わせると詳細説明が表示されます。</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-
-ONBOARDING_STEPS: List[Dict[str, object]] = [
-    {
-        "key": "load_data",
-        "nav_key": "import",
-        "title": "データを取り込んで準備しましょう",
-        "description": "テンプレートとファイルの登録を済ませると、すべての分析メニューが最新データで動作します。",
-        "bullets": [
-            "テンプレートと推奨指標を選んで分析前提を整えます。",
-            "CSV/Excelをアップロードすると品質チェックが自動で実行されます。",
-            "完了するとダッシュボードやランキングが最新データで更新されます。",
-        ],
-        "cta_label": "データ取込を開く",
-    },
-    {
-        "key": "dashboard_overview",
-        "nav_key": "dashboard",
-        "title": "ダッシュボードで全体の動きを把握",
-        "description": "年計KPIとAIサマリーで直近のトレンドと注目ポイントを素早く確認できます。",
-        "bullets": [
-            "KPIカードとAIコメントで主要な変化を一目で把握できます。",
-            "期間や店舗などの条件はサイドバーのフィルタでいつでも変更可能です。",
-            "異常や注目SKUはカードから詳細ページへジャンプして深掘りできます。",
-        ],
-        "cta_label": "ダッシュボードを開く",
-    },
-    {
-        "key": "ranking_focus",
-        "nav_key": "ranking",
-        "title": "ランキングで注目SKUを見つける",
-        "description": "指標別のトップ/ボトムを切り替えて勢いのある商品や課題商品を素早く抽出します。",
-        "bullets": [
-            "評価指標や期間、並び順はサイドバーのタブでワンクリック切り替え。",
-            "気になったSKUは詳細ページや比較ビューへ遷移して要因を分析。",
-            "CSVエクスポートで共有レポートをすぐに作成できます。",
-        ],
-        "cta_label": "ランキングを見る",
-    },
-    {
-        "key": "support_help",
-        "nav_key": "help",
-        "title": "困ったときはヘルプとツアーを活用",
-        "description": "ヘルプページでは用語集やFAQ、ガイドツアーで操作のコツをいつでも確認できます。",
-        "bullets": [
-            "各メニュー横のℹ️アイコンから該当トピックのヘルプにジャンプできます。",
-            "チュートリアルツアーを再開して主要な画面をステップ形式で復習しましょう。",
-        ],
-        "cta_label": "ヘルプを開く",
-    },
-]
 
 TOUR_STEPS: List[Dict[str, str]] = [
     {
@@ -8917,201 +8483,6 @@ TOUR_STEPS: List[Dict[str, str]] = [
 ]
 
 
-def ensure_onboarding_state() -> None:
-    """Initialize onboarding state from query parameters and session."""
-
-    params = _get_query_params()
-    query_values = params.get("onboarding", [])
-    from_query = any(value == "1" for value in query_values)
-    if "onboarding_completed" not in st.session_state:
-        st.session_state.onboarding_completed = from_query
-    else:
-        if from_query:
-            st.session_state.onboarding_completed = True
-
-    if "onboarding_open" not in st.session_state:
-        st.session_state.onboarding_open = not st.session_state.get(
-            "onboarding_completed", False
-        )
-    if "onboarding_step" not in st.session_state:
-        st.session_state.onboarding_step = 0
-
-
-def _set_onboarding_scroll_lock(enabled: bool) -> None:
-    """Enable or disable body scroll while the onboarding overlay is visible."""
-
-    flag = "true" if enabled else "false"
-    script = f"""
-    <script>
-    (function() {{
-        const doc = window.parent.document;
-        const body = doc && doc.body;
-        if (!body) return;
-        if ({flag}) {{
-            body.dataset.onboardingScrollLock = '1';
-            body.style.overflow = 'hidden';
-        }} else if (body.dataset.onboardingScrollLock) {{
-            delete body.dataset.onboardingScrollLock;
-            body.style.overflow = '';
-        }}
-    }})();
-    </script>
-    """
-    components.html(script, height=0)
-
-
-def _set_onboarding_nav_highlight(nav_key: Optional[str]) -> None:
-    """Highlight the navigation item that matches the current onboarding step."""
-
-    if nav_key:
-        target = html.escape(nav_key, quote=True)
-        script = textwrap.dedent(
-            """
-            <script>
-            (function() {{
-                const doc = window.parent.document;
-                const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                if (!sidebar) return;
-                sidebar.querySelectorAll('.nav-tree__item.onboarding-highlight').forEach((el) => el.classList.remove('onboarding-highlight'));
-                const item = sidebar.querySelector('.nav-tree__item[data-nav-key="{target}"]');
-                if (item) {{
-                    item.classList.add('onboarding-highlight');
-                    const section = item.closest('.nav-accordion__section');
-                    if (section) {{
-                        section.open = true;
-                    }}
-                }}
-            })();
-            </script>
-            """
-        ).replace("{target}", target)
-    else:
-        script = """
-        <script>
-        (function() {
-            const doc = window.parent.document;
-            const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
-            if (!sidebar) return;
-            sidebar.querySelectorAll('.nav-tree__item.onboarding-highlight').forEach((el) => el.classList.remove('onboarding-highlight'));
-        })();
-        </script>
-        """
-    components.html(script, height=0)
-
-
-def mark_onboarding_completed() -> None:
-    """Persist onboarding completion and close the overlay."""
-
-    st.session_state.onboarding_open = False
-    st.session_state.onboarding_completed = True
-    st.session_state.onboarding_step = 0
-    _set_query_param("onboarding", "1")
-    _persist_ui_preferences(
-        st.session_state.get("ui_theme", "light"),
-        st.session_state.get("elegant_on", True),
-        st.session_state.get("language"),
-        onboarding_completed=True,
-    )
-    _set_onboarding_scroll_lock(False)
-    _set_onboarding_nav_highlight(None)
-
-
-def render_onboarding_overlay() -> None:
-    """Display the onboarding quick-start dialog when required."""
-
-    ensure_onboarding_state()
-    steps = ONBOARDING_STEPS
-    if not steps:
-        return
-
-    if not st.session_state.get("onboarding_open", False):
-        _set_onboarding_scroll_lock(False)
-        _set_onboarding_nav_highlight(None)
-        return
-
-    total = len(steps)
-    idx = max(0, min(st.session_state.get("onboarding_step", 0), total - 1))
-    st.session_state.onboarding_step = idx
-    step = steps[idx]
-
-    nav_key = step.get("nav_key") or ""
-    if isinstance(nav_key, str) and nav_key:
-        _set_onboarding_nav_highlight(nav_key)
-    else:
-        _set_onboarding_nav_highlight(None)
-
-    _set_onboarding_scroll_lock(True)
-
-    step_title = html.escape(str(step.get("title", "")))
-    step_desc = html.escape(str(step.get("description", "")))
-    step_index_text = f"STEP {idx + 1} / {total}"
-
-    overlay = st.empty()
-    action_taken = False
-    with overlay.container():
-        st.markdown(
-            f"""
-            <div class="onboarding-overlay-root" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
-              <div class="onboarding-overlay__scrim" aria-hidden="true"></div>
-              <div class="onboarding-overlay__panel" data-step-index="{idx}">
-                <header class="onboarding-overlay__header">
-                  <span class="onboarding-overlay__step">{step_index_text}</span>
-                  <h2 id="onboarding-title">{step_title}</h2>
-                </header>
-                <div class="onboarding-overlay__body">
-                  <p class="onboarding-overlay__lead">{step_desc}</p>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        bullets = step.get("bullets")
-        if isinstance(bullets, (list, tuple)) and bullets:
-            bullet_html = "".join(
-                f"<li>{html.escape(str(item))}</li>" for item in bullets if item
-            )
-            st.markdown(
-                f"<ul class='onboarding-overlay__list'>{bullet_html}</ul>",
-                unsafe_allow_html=True,
-            )
-
-        cta_label = step.get("cta_label")
-        if isinstance(cta_label, str) and cta_label and isinstance(nav_key, str) and nav_key:
-            st.markdown("<div class='onboarding-overlay__cta'>", unsafe_allow_html=True)
-            cta_cols = st.columns([1, 1, 1])
-            with cta_cols[1]:
-                if st.button(cta_label, key=f"onboard_cta_{idx}", use_container_width=True):
-                    set_active_page(nav_key)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown("<div class='onboarding-overlay__actions'>", unsafe_allow_html=True)
-        action_cols = st.columns([1, 1, 1])
-        with action_cols[0]:
-            if st.button("スキップ", key=f"onboard_skip_{idx}", use_container_width=True):
-                mark_onboarding_completed()
-                action_taken = True
-        with action_cols[1]:
-            if st.button(
-                "戻る",
-                key=f"onboard_prev_{idx}",
-                disabled=idx == 0,
-                use_container_width=True,
-            ):
-                st.session_state.onboarding_step = max(0, idx - 1)
-                action_taken = True
-        next_label = "次へ" if idx < total - 1 else "完了"
-        with action_cols[2]:
-            if st.button(next_label, key=f"onboard_next_{idx}", use_container_width=True):
-                if idx < total - 1:
-                    st.session_state.onboarding_step = idx + 1
-                else:
-                    mark_onboarding_completed()
-                action_taken = True
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("</div></div></div>", unsafe_allow_html=True)
-    if action_taken:
-        return
-
-
 TOUR_STEP_ROUTES: Dict[str, str] = {
     "import": "/data",
     "dashboard": "/",
@@ -9222,17 +8593,27 @@ def render_step_guide(active_nav_key: str) -> None:
         <script>
         (function() {
             const doc = window.parent.document;
-            const findNavLink = (navKey) => {
+            const findSidebarInput = (navKey) => {
                 if (!navKey) return null;
                 const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
                 if (!sidebar) return null;
-                const item = sidebar.querySelector('.nav-tree__item[data-nav-key="' + navKey + '"]');
-                if (!item) return null;
-                const section = item.closest('.nav-accordion__section');
-                if (section) {
-                    section.open = true;
+                const label = sidebar.querySelector('label[data-nav-key="' + navKey + '"]');
+                if (!label) return null;
+                return label.querySelector('input[type="radio"]');
+            };
+            const findCategoryInput = (categoryKey) => {
+                if (!categoryKey) return null;
+                const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+                if (!sidebar) return null;
+                const label = sidebar.querySelector('label[data-category-key="' + categoryKey + '"]');
+                if (label) {
+                    const input = label.querySelector('input[type="radio"]');
+                    if (input) {
+                        return input;
+                    }
                 }
-                return item.querySelector('.nav-tree__link');
+                const radios = Array.from(sidebar.querySelectorAll('input[type="radio"]'));
+                return radios.find((input) => input.value === categoryKey) || null;
             };
             const bind = (attempt = 0) => {
                 const items = Array.from(doc.querySelectorAll('.tour-step-guide__item[data-step]'));
@@ -9247,9 +8628,21 @@ def render_step_guide(active_nav_key: str) -> None:
                     item.dataset.navBound = '1';
                     const activate = () => {
                         const navKey = item.dataset.step;
-                        const link = findNavLink(navKey);
-                        if (link) {
-                            link.click();
+                        const categoryKey = item.dataset.category;
+                        const input = findSidebarInput(navKey);
+                        const categoryInput = findCategoryInput(categoryKey);
+                        if (categoryInput && !categoryInput.checked) {
+                            categoryInput.click();
+                            setTimeout(() => {
+                                const refreshed = findSidebarInput(navKey);
+                                if (refreshed && !refreshed.checked) {
+                                    refreshed.click();
+                                }
+                            }, 80);
+                            return;
+                        }
+                        if (input && !input.checked) {
+                            input.click();
                         }
                     };
                     item.addEventListener('click', activate);
@@ -9798,9 +9191,9 @@ FLOW_PAGE_OVERRIDES: Dict[str, str] = {
 }
 
 FLOW_CATEGORY_DEFAULT: Dict[str, str] = {
-    "setup": "upload",
-    "insight": "report",
-    "monitor": "report",
+    "input": "upload",
+    "report": "report",
+    "simulation": "report",
 }
 
 
@@ -9916,16 +9309,11 @@ def render_breadcrumbs(category_key: str, page_key: str) -> None:
 
     category_meta = SIDEBAR_CATEGORY_STYLES.get(category_key, {})
     category_label = category_meta.get("label", category_key or "")
-    group_key = PAGE_GROUP_LOOKUP.get(page_key, "")
-    group_meta = SIDEBAR_GROUP_LOOKUP.get(group_key, {}) if group_key else {}
-    group_label = group_meta.get("label", "")
     page_title = page_meta.get("title") or page_meta.get("page") or page_key
 
     trail_items: List[tuple[str, bool]] = [("ホーム", False)]
     if category_label:
         trail_items.append((category_label, False))
-    if group_label:
-        trail_items.append((group_label, False))
     trail_items.append((page_title, True))
 
     trail_html: List[str] = []
@@ -9939,29 +9327,18 @@ def render_breadcrumbs(category_key: str, page_key: str) -> None:
         if idx < len(trail_items) - 1:
             trail_html.append("<span class='mck-breadcrumb__sep'>›</span>")
 
-    meta_text = ""
-    if group_key and group_key in SIDEBAR_GROUP_PAGE_KEYS:
-        group_keys = [
-            key for key in SIDEBAR_GROUP_PAGE_KEYS.get(group_key, []) if key in NAV_KEYS
-        ]
-        total = len(group_keys)
-        if total:
-            try:
-                position = group_keys.index(page_key) + 1
-            except ValueError:
-                position = 1
-            meta_text = f"{group_label or 'セクション'} {position} / {total}"
-    if not meta_text:
-        category_keys = [
-            key for key in NAV_KEYS if PAGE_CATEGORY_LOOKUP.get(key) == category_key
-        ]
-        total = len(category_keys)
-        if total:
-            try:
-                position = category_keys.index(page_key) + 1
-            except ValueError:
-                position = 1
-            meta_text = f"カテゴリ {position} / {total}"
+    category_pages = [
+        meta for meta in SIDEBAR_PAGES if meta.get("category") == category_key
+    ]
+    source_pages = category_pages or SIDEBAR_PAGES
+    total = len(source_pages)
+    position = 1
+    for idx, meta in enumerate(source_pages):
+        if meta.get("key") == page_key:
+            position = idx + 1
+            break
+
+    meta_text = f"ページ {position} / {total}" if total else ""
     breadcrumb_html = (
         "<div class='mck-breadcrumb'>"
         f"<div class='mck-breadcrumb__trail'>{''.join(trail_html)}</div>"
@@ -9977,9 +9354,6 @@ def render_breadcrumbs(category_key: str, page_key: str) -> None:
     tagline = page_meta.get("tagline")
     if tagline:
         desc_parts.append(tagline)
-    group_desc = group_meta.get("description") if group_meta else ""
-    if group_desc and group_desc not in desc_parts:
-        desc_parts.append(group_desc)
     category_desc = category_meta.get("description")
     if category_desc and category_desc not in desc_parts:
         desc_parts.append(category_desc)
@@ -10153,8 +9527,6 @@ page_meta = SIDEBAR_PAGE_LOOKUP.get(page_key, {})
 render_navigation_tree(page_key)
 if page_meta.get("tagline"):
     st.sidebar.caption(page_meta["tagline"])
-
-render_onboarding_overlay()
 
 components.html(
     """
@@ -10349,6 +9721,8 @@ st.sidebar.divider()
 render_app_hero()
 
 render_process_step_bar(page_key)
+
+render_onboarding_modal()
 
 render_tour_banner()
 
