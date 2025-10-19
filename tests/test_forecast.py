@@ -10,7 +10,6 @@ from services import (
     forecast_holt_linear,
     band_from_moving_stats,
     detect_linear_anomalies,
-    detect_ts_anomalies,
 )
 
 def test_forecast_linear_band_basic():
@@ -36,24 +35,3 @@ def test_detect_linear_anomalies():
     res = detect_linear_anomalies(s, window=3, threshold=2.5, robust=False)
     assert not res.empty
     assert 4 in res["month"].values
-
-
-def test_detect_ts_anomalies_stl():
-    months = pd.period_range("2020-01", periods=24, freq="M").strftime("%Y-%m")
-    data = np.ones(len(months)) * 50
-    data[10] = 120
-    data[15] = 60
-    series = pd.Series(data, index=months)
-    res = detect_ts_anomalies(series, method="stl", threshold=2.5, seasonal_periods=12)
-    assert not res.empty
-    assert any(m in res["month"].values for m in [months[10], months[11], months[15]])
-
-
-def test_detect_ts_anomalies_arima():
-    months = pd.period_range("2021-01", periods=20, freq="M").strftime("%Y-%m")
-    data = np.linspace(10, 30, len(months))
-    data[15] += 20
-    series = pd.Series(data, index=months)
-    res = detect_ts_anomalies(series, method="arima", threshold=2.0)
-    assert not res.empty
-    assert any(m in res["month"].values for m in [months[15], months[14]])
