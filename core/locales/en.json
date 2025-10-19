@@ -1,0 +1,75 @@
+{
+  "header": {
+    "actions": {
+      "note": "All essential workflows are curated on this single screen.",
+      "primary": {
+        "description": "Preview the dashboard instantly with demo data templates.",
+        "href": "?nav=import",
+        "label": "Try with sample data"
+      },
+      "secondary": {
+        "description": "Review CSV/Excel preparation tips and templates.",
+        "href": "?nav=help",
+        "label": "Open data import guide"
+      }
+    },
+    "dark_mode": {
+      "help": "Switch to a low-light navy palette for extended analysis sessions.",
+      "label": "Dark mode"
+    },
+    "description": "Understand growth drivers and risks through a rolling 12-month view and decide the next action quickly.",
+    "elegant_toggle": {
+      "help": "Apply refined colors, spacing, and typography for a polished reading experience.",
+      "label": "Elegant UI"
+    },
+    "eyebrow": "Growth Intelligence Workspace",
+    "highlights": {
+      "copilot": {
+        "description": "Copilot surfaces KPI drivers and key SKUs in seconds.",
+        "title": "AI distills the signal"
+      },
+      "trend": {
+        "description": "Reveal acceleration and slowdowns across the latest 12-month trend.",
+        "title": "Spot momentum instantly"
+      },
+      "workflow": {
+        "description": "Move seamlessly from rankings to comparisons and anomaly scouting.",
+        "title": "Guide the next action"
+      }
+    },
+    "language_selector": {
+      "label": "Language"
+    },
+    "stats": {
+      "ai": {
+        "label": "Analysis mode",
+        "value": "AI Summary"
+      },
+      "coverage": {
+        "label": "Rolling window",
+        "value": "12 months"
+      },
+      "refresh": {
+        "label": "Refresh cadence",
+        "value": "Monthly"
+      }
+    },
+    "title": "Rolling 12-Month Total Sales Dashboard"
+  },
+  "language_names": {
+    "en": "English",
+    "ja": "Japanese",
+    "zh": "Chinese"
+  },
+  "processing": {
+    "completed": "Dataset preparation is complete.",
+    "fill": "Reconciling missing months…",
+    "finalizing": "Applying results to the dashboard…",
+    "rolling": "Calculating yearly KPIs…",
+    "slopes": "Updating growth momentum metrics…",
+    "start": "Preparing dataset…"
+  },
+  "sidebar": {
+    "navigation_title": "Navigation"
+  }
+}

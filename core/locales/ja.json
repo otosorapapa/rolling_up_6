@@ -1,0 +1,75 @@
+{
+  "header": {
+    "actions": {
+      "note": "ダッシュボードの主要ワークフローをこの1画面に集約しました。",
+      "primary": {
+        "description": "テンプレートとデモデータですぐにダッシュボードを体験",
+        "href": "?nav=import",
+        "label": "サンプルデータで試す"
+      },
+      "secondary": {
+        "description": "CSV/Excelの整形とテンプレートのポイントを確認",
+        "href": "?nav=help",
+        "label": "データ取込ガイドを見る"
+      }
+    },
+    "dark_mode": {
+      "help": "長時間の閲覧向けに暗色テーマへ切り替えます",
+      "label": "ダークモード"
+    },
+    "description": "12カ月移動累計で成長ドライバーとリスクを直感的に把握し、次の一手を素早く導きます。",
+    "elegant_toggle": {
+      "help": "上品で読みやすい配色・余白・タイポグラフィを適用",
+      "label": "品格UI"
+    },
+    "eyebrow": "グロースインテリジェンス・ワークスペース",
+    "highlights": {
+      "copilot": {
+        "description": "コパイロットがKPIの変化要因や注目SKUを短時間で提案します。",
+        "title": "AIが要点を要約"
+      },
+      "trend": {
+        "description": "直近12カ月の推移から伸びと減速の兆しを見抜きます。",
+        "title": "勢いを一目で把握"
+      },
+      "workflow": {
+        "description": "ランキング・比較・異常検知まで一気通貫で深掘りできます。",
+        "title": "次のアクションを導く"
+      }
+    },
+    "language_selector": {
+      "label": "言語"
+    },
+    "stats": {
+      "ai": {
+        "label": "分析モード",
+        "value": "AIサマリー"
+      },
+      "coverage": {
+        "label": "ローリング期間",
+        "value": "12ヶ月"
+      },
+      "refresh": {
+        "label": "更新頻度",
+        "value": "月次更新"
+      }
+    },
+    "title": "売上年計（12カ月移動累計）ダッシュボード"
+  },
+  "language_names": {
+    "en": "英語",
+    "ja": "日本語",
+    "zh": "中国語"
+  },
+  "processing": {
+    "completed": "データ整形が完了しました。",
+    "fill": "欠測月を補完しています…",
+    "finalizing": "ダッシュボードに反映しています…",
+    "rolling": "年計指標を計算しています…",
+    "slopes": "トレンド指標を更新しています…",
+    "start": "データを整形しています…"
+  },
+  "sidebar": {
+    "navigation_title": "ナビゲーション"
+  }
+}
