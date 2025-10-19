@@ -1,0 +1,75 @@
+{
+  "header": {
+    "actions": {
+      "note": "关键工作流程全部汇聚在这一页面。",
+      "primary": {
+        "description": "使用演示数据模板立即体验仪表板。",
+        "href": "?nav=import",
+        "label": "试用示例数据"
+      },
+      "secondary": {
+        "description": "查看 CSV/Excel 整形要点与模板。",
+        "href": "?nav=help",
+        "label": "查看数据导入指南"
+      }
+    },
+    "dark_mode": {
+      "help": "切换为低亮度深色主题，适合长时间分析。",
+      "label": "深色模式"
+    },
+    "description": "通过滚动12个月视角洞察增长驱动因素与风险，迅速确定下一步行动。",
+    "elegant_toggle": {
+      "help": "应用精致的配色、间距与字体，提升阅读体验。",
+      "label": "精致界面"
+    },
+    "eyebrow": "增长智能工作区",
+    "highlights": {
+      "copilot": {
+        "description": "副驾在数秒内提示 KPI 变化驱动因素与关键 SKU。",
+        "title": "AI 提炼关键信号"
+      },
+      "trend": {
+        "description": "从最近12个月走势中识别加速与放缓信号。",
+        "title": "瞬间掌握动向"
+      },
+      "workflow": {
+        "description": "在排行榜、对比、异常检测之间无缝切换深入分析。",
+        "title": "引导下一步行动"
+      }
+    },
+    "language_selector": {
+      "label": "语言"
+    },
+    "stats": {
+      "ai": {
+        "label": "分析模式",
+        "value": "AI 摘要"
+      },
+      "coverage": {
+        "label": "滚动窗口",
+        "value": "12个月"
+      },
+      "refresh": {
+        "label": "更新频率",
+        "value": "每月"
+      }
+    },
+    "title": "滚动12个月销售仪表板"
+  },
+  "language_names": {
+    "en": "英语",
+    "ja": "日语",
+    "zh": "中文"
+  },
+  "processing": {
+    "completed": "数据整理已完成。",
+    "fill": "正在补齐缺失月份…",
+    "finalizing": "正在将结果写入仪表板…",
+    "rolling": "正在计算年度关键指标…",
+    "slopes": "正在更新增长动能指标…",
+    "start": "正在整理数据…"
+  },
+  "sidebar": {
+    "navigation_title": "导航"
+  }
+}

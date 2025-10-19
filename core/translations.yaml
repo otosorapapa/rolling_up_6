@@ -1,14 +1,21 @@
 languages:
   - ja
   - en
+  - zh
 
 language_names:
   ja:
     ja: 日本語
     en: Japanese
+    zh: 日语
   en:
     ja: 英語
     en: English
+    zh: 英语
+  zh:
+    ja: 中国語
+    en: Chinese
+    zh: 中文
 
 header:
   title:
